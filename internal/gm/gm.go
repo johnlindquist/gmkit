@@ -21,10 +21,12 @@ import (
 	"sync"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/rs/zerolog"
 
 	"go.mau.fi/mautrix-gmessages/pkg/libgm"
 	"go.mau.fi/mautrix-gmessages/pkg/libgm/events"
+	"go.mau.fi/mautrix-gmessages/pkg/libgm/gmproto"
 
 	"github.com/fdsouvenir/gmcli/internal/paths"
 )
@@ -95,11 +97,154 @@ func (c *Client) IsConnected() bool {
 	return c.libgm.IsConnected()
 }
 
+// WaitForReady blocks until the libgm client emits *events.ClientReady or
+// the context is cancelled. SendMessage and SendReaction need an established
+// session before they can round-trip a response; ClientReady is the earliest
+// signal that the session is up. The handler is removed before returning.
+//
+// Subscribe(c.WaitForReady...) is not the right idiom — this method
+// installs and removes a single-fire subscriber for you.
+func (c *Client) WaitForReady(ctx context.Context) error {
+	if c.libgm.IsConnected() {
+		// Already ready — but ClientReady has likely already fired and
+		// won't repeat. Best effort: return immediately.
+		return nil
+	}
+	ready := make(chan struct{}, 1)
+	var fired sync.Once
+
+	c.mu.Lock()
+	idx := len(c.subscribers)
+	c.subscribers = append(c.subscribers, func(evt any) {
+		if _, ok := evt.(*events.ClientReady); ok {
+			fired.Do(func() { close(ready) })
+		}
+	})
+	c.mu.Unlock()
+
+	defer func() {
+		c.mu.Lock()
+		// Remove only our subscriber; preserve any added concurrently.
+		if idx < len(c.subscribers) {
+			c.subscribers = append(c.subscribers[:idx], c.subscribers[idx+1:]...)
+		}
+		c.mu.Unlock()
+	}()
+
+	select {
+	case <-ready:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+}
+
 // Underlying returns the wrapped *libgm.Client for callers that need access
 // to libgm methods we haven't surfaced yet (ListContacts, FetchMessages,
-// SendMessage, etc.). Phase 3 will replace direct usage of this with typed
-// store-backed helpers.
+// etc.). Higher-level operations should prefer the typed wrappers below.
 func (c *Client) Underlying() *libgm.Client { return c.libgm }
+
+// SendTextResult describes a successful send.
+type SendTextResult struct {
+	MessageID      string
+	ConversationID string
+	TmpID          string
+}
+
+// SendText sends a text message into the given conversation. ReplyToID is
+// optional; when set, the new message is rendered as a quoted reply by the
+// recipient's client. The libgm long-poll must be Connected; call
+// WaitForReady first for fresh sessions.
+func (c *Client) SendText(conversationID, body, replyToID string) (*SendTextResult, error) {
+	if conversationID == "" {
+		return nil, fmt.Errorf("conversation id is required")
+	}
+	if body == "" {
+		return nil, fmt.Errorf("message body is required")
+	}
+	tmpID := uuid.NewString()
+	req := &gmproto.SendMessageRequest{
+		ConversationID: conversationID,
+		TmpID:          tmpID,
+		MessagePayload: &gmproto.MessagePayload{
+			ConversationID: conversationID,
+			TmpID:          tmpID,
+			TmpID2:         tmpID,
+			MessagePayloadContent: &gmproto.MessagePayloadContent{
+				MessageContent: &gmproto.MessageContent{Content: body},
+			},
+		},
+	}
+	if replyToID != "" {
+		req.Reply = &gmproto.ReplyPayload{MessageID: replyToID}
+	}
+	resp, err := c.libgm.SendMessage(req)
+	if err != nil {
+		return nil, fmt.Errorf("libgm send: %w", err)
+	}
+	if resp.GetStatus() != gmproto.SendMessageResponse_SUCCESS {
+		return nil, fmt.Errorf("send rejected by phone: status=%s", resp.GetStatus())
+	}
+	// libgm doesn't echo the canonical message_id directly in the response;
+	// it arrives shortly after via the WrappedMessage event. Return the
+	// tmpID so the caller can correlate. Sync-pump-driven upserts will
+	// reconcile against the real message_id when it arrives.
+	return &SendTextResult{
+		MessageID:      tmpID,
+		ConversationID: conversationID,
+		TmpID:          tmpID,
+	}, nil
+}
+
+// ReactionAction selects ADD / REMOVE / SWITCH semantics on SendReaction.
+type ReactionAction int
+
+const (
+	ReactionAdd ReactionAction = iota
+	ReactionRemove
+	ReactionSwitch
+)
+
+// SendReaction adds, removes, or switches a unicode reaction on a message.
+func (c *Client) SendReaction(messageID, emoji string, action ReactionAction) error {
+	if messageID == "" {
+		return fmt.Errorf("message id is required")
+	}
+	if emoji == "" {
+		return fmt.Errorf("emoji is required")
+	}
+	var act gmproto.SendReactionRequest_Action
+	switch action {
+	case ReactionAdd:
+		act = gmproto.SendReactionRequest_ADD
+	case ReactionRemove:
+		act = gmproto.SendReactionRequest_REMOVE
+	case ReactionSwitch:
+		act = gmproto.SendReactionRequest_SWITCH
+	default:
+		return fmt.Errorf("unknown reaction action %v", action)
+	}
+	_, err := c.libgm.SendReaction(&gmproto.SendReactionRequest{
+		MessageID:    messageID,
+		Action:       act,
+		ReactionData: &gmproto.ReactionData{Unicode: emoji},
+	})
+	if err != nil {
+		return fmt.Errorf("libgm reaction: %w", err)
+	}
+	return nil
+}
+
+// DownloadMedia retrieves and decrypts the bytes for an attachment.
+// The connection does not need to be in long-poll mode — DownloadMedia
+// uses authenticated HTTP — but the AuthData's TachyonAuthToken must be
+// fresh. Call Connect once before this if the session has been idle.
+func (c *Client) DownloadMedia(mediaID string, key []byte) ([]byte, error) {
+	if mediaID == "" {
+		return nil, fmt.Errorf("media id is required")
+	}
+	return c.libgm.DownloadMedia(mediaID, key)
+}
 
 // AuthSnapshot returns a deep copy of the current AuthData by JSON
 // round-trip. Useful for diagnostics; do not modify.

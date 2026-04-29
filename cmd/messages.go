@@ -108,7 +108,7 @@ func messagesSearchCmd() *cobra.Command {
 					dir,
 					h.MessageID,
 					h.ConversationID,
-					output.Truncate(h.Snippet, 80),
+					truncate(h.Snippet, 80),
 				})
 			}
 			return output.Table(os.Stdout, []string{"time", "dir", "msg_id", "conv_id", "snippet"}, rows)
@@ -198,7 +198,7 @@ func renderMessages(msgs []store.Message) error {
 			dir,
 			m.SenderID,
 			m.ID,
-			output.Truncate(body, 80),
+			truncate(body, 80),
 		})
 	}
 	return output.Table(os.Stdout, []string{"time", "dir", "sender", "msg_id", "body"}, rows)

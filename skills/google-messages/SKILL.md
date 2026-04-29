@@ -30,6 +30,11 @@ through the `gmcli` CLI. The skill is read-only.
 - Pairing or syncing the archive ("connect my phone", "sync messages"). Tell
   the user to run `gmcli auth` (one-time pairing) or `gmcli sync --follow`
   themselves; do not run those yourself.
+- Setting aliases or labels ("call her Mom from now on"). The
+  `contacts alias` verbs require `--read-only=false`; do not run them. Tell
+  the user the exact command to run themselves.
+- Downloading media (`media download` requires `--read-only=false`). If the
+  user wants to see an attachment, give them the exact command to run.
 
 ## Tools
 
@@ -48,9 +53,12 @@ archive when a focused query will do.
    gmcli --json --read-only contacts search "<name fragment>"
    ```
 
-   Returns up to 50 contacts matching the substring across name, e164, and
-   formatted_number. Pick the right one based on context. If multiple match
-   and none is obviously right, ask the user to disambiguate.
+   Returns up to 50 contacts matching the substring across name, alias,
+   e164, and formatted_number. Each row carries both `name` (Google's
+   contact name) and `display_name` (the local alias if one is set,
+   otherwise `name`). Always present `display_name` to the user; mention
+   `name` only if disambiguation requires it. If multiple match and none
+   is obviously right, ask the user to disambiguate.
 
 2. **Find their conversation_id.** `chats list` returns a `participants_json`
    blob per row containing the participant ids; filter client-side:

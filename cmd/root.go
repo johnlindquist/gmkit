@@ -11,6 +11,7 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/fdsouvenir/gmcli/internal/logging"
+	"github.com/fdsouvenir/gmcli/internal/output"
 	"github.com/fdsouvenir/gmcli/internal/paths"
 	"github.com/fdsouvenir/gmcli/internal/store"
 )
@@ -22,9 +23,39 @@ type globalFlags struct {
 	logLevel string
 	jsonOut  bool
 	readOnly bool
+	full     bool
 }
 
 var flags globalFlags
+
+// requireWritable returns a non-nil error when the user has not opted into
+// write commands (--read-only=false). Mirrors wacli's gating semantics
+// modulo our inverted default.
+func requireWritable() error {
+	if flags.readOnly {
+		return errReadOnly
+	}
+	return nil
+}
+
+// errReadOnly is the canonical error surfaced by write subcommands when
+// --read-only is in effect (the default).
+var errReadOnly = errReadOnlyT{}
+
+type errReadOnlyT struct{}
+
+func (errReadOnlyT) Error() string {
+	return "read-only mode: this command would mutate state. Re-run with --read-only=false to allow it."
+}
+
+// truncate caps a string to n runes when --full is unset; otherwise returns
+// it verbatim. Use this everywhere render code wants to truncate.
+func truncate(s string, n int) string {
+	if flags.full {
+		return s
+	}
+	return output.Truncate(s, n)
+}
 
 // Root constructs the top-level *cobra.Command.
 func Root() *cobra.Command {
@@ -35,10 +66,11 @@ func Root() *cobra.Command {
 		SilenceErrors: true,
 		SilenceUsage:  true,
 	}
-	root.PersistentFlags().StringVar(&flags.storeDir, "store", "", "data directory (default: $XDG_DATA_HOME/gmcli)")
+	root.PersistentFlags().StringVar(&flags.storeDir, "store", "", "data directory (default: $XDG_STATE_HOME/gmcli or ~/.local/state/gmcli)")
 	root.PersistentFlags().StringVar(&flags.logLevel, "log-level", "info", "log verbosity: trace, debug, info, warn, error")
 	root.PersistentFlags().BoolVar(&flags.jsonOut, "json", false, "emit machine-readable JSON output where applicable")
-	root.PersistentFlags().BoolVar(&flags.readOnly, "read-only", true, "block any operation that would write to the phone")
+	root.PersistentFlags().BoolVar(&flags.readOnly, "read-only", true, "block any operation that would write to the phone or local store")
+	root.PersistentFlags().BoolVar(&flags.full, "full", false, "disable truncation in tabular output")
 
 	root.AddCommand(authCmd())
 	root.AddCommand(syncCmd())
@@ -47,6 +79,8 @@ func Root() *cobra.Command {
 	root.AddCommand(messagesCmd())
 	root.AddCommand(contactsCmd())
 	root.AddCommand(chatsCmd())
+	root.AddCommand(sendCmd())
+	root.AddCommand(mediaCmd())
 	return root
 }
 

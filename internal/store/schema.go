@@ -1,7 +1,7 @@
 package store
 
 // schemaVersion is the migration target. Bump when migrations[] grows.
-const schemaVersion = 1
+const schemaVersion = 2
 
 // migrations are applied in order. Each runs in its own transaction; the
 // store records the highest applied version in the schema_version table.
@@ -112,5 +112,21 @@ var migrations = []string{
 	INSERT INTO sync_state (id, updated_at) VALUES (1, 0);
 
 	INSERT INTO schema_version (version) VALUES (1);
+	`,
+	// v2: local-only contact and conversation aliases. Aliases are user
+	// labels that override the libgm-supplied name in display contexts.
+	// They are intentionally local — never sent back to Google — so the
+	// user can call a participant "Mom" without affecting their address
+	// book on the phone. Modeled on wacli's contacts alias verb.
+	`
+	CREATE TABLE aliases (
+		target_type   TEXT NOT NULL CHECK (target_type IN ('contact','conversation')),
+		target_id     TEXT NOT NULL,
+		alias         TEXT NOT NULL,
+		updated_at    INTEGER NOT NULL,
+		PRIMARY KEY (target_type, target_id)
+	) STRICT;
+
+	INSERT INTO schema_version (version) VALUES (2);
 	`,
 }

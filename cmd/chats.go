@@ -65,7 +65,7 @@ func chatsListCmd() *cobra.Command {
 					boolMark(c.Unread, "*"),
 					boolMark(c.Pinned, "P"),
 					participantSummary(c.ParticipantsJSON),
-					output.Truncate(c.Name, 40),
+					truncate(c.Name, 40),
 					c.ID,
 				})
 			}
@@ -181,5 +181,5 @@ func participantSummary(js string) string {
 	for _, n := range names[1:] {
 		out += ", " + n
 	}
-	return output.Truncate(out, 40)
+	return truncate(out, 40)
 }

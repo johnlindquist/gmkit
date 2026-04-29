@@ -42,7 +42,8 @@ func TestEnsureDirsCreatesTree(t *testing.T) {
 }
 
 func TestResolveRespectsXDG(t *testing.T) {
-	t.Setenv("XDG_DATA_HOME", "/tmp/xdg-test")
+	t.Setenv("XDG_STATE_HOME", "/tmp/xdg-test")
+	t.Setenv("XDG_DATA_HOME", "")
 	got, err := paths.Resolve("")
 	if err != nil {
 		t.Fatalf("resolve: %v", err)

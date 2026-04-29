@@ -61,40 +61,53 @@ gmcli auth
 #    the connection open and writes new messages as they arrive.
 gmcli sync --follow
 
-# 3. Query the local archive.
+# 3. Query the local archive (read-only).
 gmcli chats list                              # most-recent conversations
 gmcli chats show <conversation-id>            # header + recent messages
 gmcli messages search "dinner"                # FTS5 across all conversations
 gmcli messages list --conv <conv-id>          # message list with filters
 gmcli messages show <message-id>              # single message detail
 gmcli messages context <message-id>           # surrounding messages
-gmcli contacts search alice                   # name/number substring match
+gmcli contacts search alice                   # name/number/alias substring match
 gmcli contacts show <participant-id-or-num>   # contact detail
 
-# Every query supports --json for machine-readable output.
+# 4. Local-only labels (also requires --read-only=false).
+gmcli --read-only=false contacts alias set --id <pid> --alias "Mom"
+gmcli contacts alias list                     # list all set aliases
+gmcli --read-only=false contacts alias rm --id <pid>
+
+# 5. Write to the phone (always requires --read-only=false).
+gmcli --read-only=false send text --to <conv-id> --message "on my way"
+gmcli --read-only=false send react --message <msg-id> --emoji "👍"
+gmcli --read-only=false media download --message <msg-id>
+
+# Every command supports --json for machine-readable output and --full to
+# disable truncation in tables.
 gmcli --json chats list | jq '.[0].name'
 ```
 
 ## Global flags
 
-| Flag             | Default                            | Purpose                                   |
-| ---------------- | ---------------------------------- | ----------------------------------------- |
-| `--store DIR`    | `$XDG_DATA_HOME/gmcli`             | Where session and SQLite files live.      |
-| `--read-only`    | `true`                             | Block writes to the phone (sends, edits). |
-| `--json`         | `false`                            | Emit machine-readable output.             |
-| `--log-level`    | `info`                             | Verbosity (`trace`/`debug`/`info`/`warn`). |
+| Flag             | Default                            | Purpose                                                  |
+| ---------------- | ---------------------------------- | -------------------------------------------------------- |
+| `--store DIR`    | `$XDG_STATE_HOME/gmcli`            | Where session, SQLite, and downloaded media live.        |
+| `--read-only`    | `true`                             | Block any command that would mutate the phone or store. |
+| `--json`         | `false`                            | Emit machine-readable output.                            |
+| `--full`         | `false`                            | Disable truncation in tabular output.                    |
+| `--log-level`    | `info`                             | Verbosity (`trace`/`debug`/`info`/`warn`).               |
 
 ## Layout
 
 ```
 cmd/                  Cobra command tree (auth, sync, version, doctor,
-                      messages, contacts, chats)
+                      messages, contacts, chats, send, media)
 internal/
-  gm/                 libgm wrapper — pairing, session persistence, events
-  store/              SQLite + FTS5 store (schema, queries, migrations)
+  gm/                 libgm wrapper — pairing, session, events, send/react,
+                      WaitForReady, DownloadMedia
+  store/              SQLite + FTS5 store (schema v2: + aliases table)
   sync/               Event-to-store pump
   output/             Shared JSON / tab-aligned table renderers
-  paths/              XDG path resolution
+  paths/              XDG path resolution (XDG_STATE_HOME)
   logging/            zerolog setup
 skills/
   google-messages/    LLM skill bundle — read-only playbook for assistants

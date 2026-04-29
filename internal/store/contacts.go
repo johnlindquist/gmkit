@@ -12,6 +12,10 @@ import (
 // Contact is the storage shape for an address-book entry. ParticipantID is
 // the libgm-stable ID and forms the primary key; ContactID is Google's
 // contact-database ID (may be empty for non-saved numbers).
+//
+// Alias is the local user label (from the aliases table) when one is set.
+// DisplayName is Alias if non-empty, otherwise Name — render code should
+// always read DisplayName, never Name directly.
 type Contact struct {
 	ParticipantID   string
 	SourcePlatform  string
@@ -21,6 +25,8 @@ type Contact struct {
 	FormattedNumber string
 	AvatarColor     string
 	IsMe            bool
+	Alias           string `json:"alias,omitempty"`
+	DisplayName     string `json:"display_name,omitempty"`
 }
 
 // UpsertContact inserts or updates a contact row by ParticipantID.
@@ -64,30 +70,35 @@ func (s *Store) CountContacts(ctx context.Context) (int, error) {
 	return n, err
 }
 
-// SearchContacts returns contacts matching query against name/e164/formatted_number
-// using a case-insensitive substring match. Limit <=0 means 50.
+// SearchContacts returns contacts matching query against name, alias, e164,
+// or formatted_number using a case-insensitive substring match. Limit <=0
+// means 50.
 func (s *Store) SearchContacts(ctx context.Context, query string, limit int) ([]Contact, error) {
 	if limit <= 0 {
 		limit = 50
 	}
 	q := `
-		SELECT participant_id, source_platform, contact_id, name, e164,
-		       formatted_number, avatar_color, is_me
-		  FROM contacts`
+		SELECT c.participant_id, c.source_platform, c.contact_id, c.name, c.e164,
+		       c.formatted_number, c.avatar_color, c.is_me,
+		       COALESCE(a.alias, '') AS alias
+		  FROM contacts c
+		  LEFT JOIN aliases a
+		    ON a.target_type = 'contact' AND a.target_id = c.participant_id`
 	var args []any
 	if query != "" {
-		// Match against any of the user-visible fields. SQLite LIKE is
+		// Match against name, alias, e164, formatted_number. SQLite LIKE is
 		// case-insensitive for ASCII by default; for non-ASCII names we'd
 		// need an ICU-aware collation, which modernc.org/sqlite doesn't
 		// ship — acceptable for the scaffold.
 		like := "%" + strings.ReplaceAll(strings.ReplaceAll(query, `\`, `\\`), `%`, `\%`) + "%"
 		q += `
-		 WHERE name LIKE ? ESCAPE '\'
-		    OR e164 LIKE ? ESCAPE '\'
-		    OR formatted_number LIKE ? ESCAPE '\'`
-		args = append(args, like, like, like)
+		 WHERE c.name LIKE ? ESCAPE '\'
+		    OR a.alias LIKE ? ESCAPE '\'
+		    OR c.e164 LIKE ? ESCAPE '\'
+		    OR c.formatted_number LIKE ? ESCAPE '\'`
+		args = append(args, like, like, like, like)
 	}
-	q += " ORDER BY name COLLATE NOCASE ASC LIMIT ?"
+	q += " ORDER BY COALESCE(a.alias, c.name) COLLATE NOCASE ASC LIMIT ?"
 	args = append(args, limit)
 
 	rows, err := s.db.QueryContext(ctx, q, args...)
@@ -97,7 +108,7 @@ func (s *Store) SearchContacts(ctx context.Context, query string, limit int) ([]
 	defer rows.Close()
 	var out []Contact
 	for rows.Next() {
-		c, err := scanContact(rows)
+		c, err := scanContactWithAlias(rows)
 		if err != nil {
 			return nil, err
 		}
@@ -110,11 +121,14 @@ func (s *Store) SearchContacts(ctx context.Context, query string, limit int) ([]
 // or contact_id lookup, see GetContactByNumber. Returns ErrNotFound on miss.
 func (s *Store) GetContact(ctx context.Context, participantID string) (Contact, error) {
 	row := s.db.QueryRowContext(ctx, `
-		SELECT participant_id, source_platform, contact_id, name, e164,
-		       formatted_number, avatar_color, is_me
-		  FROM contacts
-		 WHERE participant_id = ?`, participantID)
-	c, err := scanContact(row)
+		SELECT c.participant_id, c.source_platform, c.contact_id, c.name, c.e164,
+		       c.formatted_number, c.avatar_color, c.is_me,
+		       COALESCE(a.alias, '') AS alias
+		  FROM contacts c
+		  LEFT JOIN aliases a
+		    ON a.target_type = 'contact' AND a.target_id = c.participant_id
+		 WHERE c.participant_id = ?`, participantID)
+	c, err := scanContactWithAlias(row)
 	if errors.Is(err, sql.ErrNoRows) {
 		return Contact{}, ErrNotFound
 	}
@@ -126,30 +140,37 @@ func (s *Store) GetContact(ctx context.Context, participantID string) (Contact, 
 // either a participant_id or a phone number.
 func (s *Store) GetContactByNumber(ctx context.Context, number string) (Contact, error) {
 	row := s.db.QueryRowContext(ctx, `
-		SELECT participant_id, source_platform, contact_id, name, e164,
-		       formatted_number, avatar_color, is_me
-		  FROM contacts
-		 WHERE e164 = ? OR formatted_number = ?
+		SELECT c.participant_id, c.source_platform, c.contact_id, c.name, c.e164,
+		       c.formatted_number, c.avatar_color, c.is_me,
+		       COALESCE(a.alias, '') AS alias
+		  FROM contacts c
+		  LEFT JOIN aliases a
+		    ON a.target_type = 'contact' AND a.target_id = c.participant_id
+		 WHERE c.e164 = ? OR c.formatted_number = ?
 		 LIMIT 1`, number, number)
-	c, err := scanContact(row)
+	c, err := scanContactWithAlias(row)
 	if errors.Is(err, sql.ErrNoRows) {
 		return Contact{}, ErrNotFound
 	}
 	return c, err
 }
 
-func scanContact(r interface {
+func scanContactWithAlias(r interface {
 	Scan(...any) error
 }) (Contact, error) {
 	var c Contact
 	var isMe int64
 	if err := r.Scan(
 		&c.ParticipantID, &c.SourcePlatform, &c.ContactID, &c.Name, &c.E164,
-		&c.FormattedNumber, &c.AvatarColor, &isMe,
+		&c.FormattedNumber, &c.AvatarColor, &isMe, &c.Alias,
 	); err != nil {
 		return Contact{}, err
 	}
 	c.IsMe = isMe != 0
+	c.DisplayName = c.Name
+	if c.Alias != "" {
+		c.DisplayName = c.Alias
+	}
 	return c, nil
 }
 

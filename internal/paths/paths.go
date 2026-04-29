@@ -16,8 +16,10 @@ type Layout struct {
 }
 
 // Resolve returns the layout rooted at storeOverride if non-empty, otherwise
-// at $XDG_DATA_HOME/gmcli (falling back to $HOME/.local/share/gmcli, and on
-// macOS to $HOME/Library/Application Support/gmcli).
+// at $XDG_STATE_HOME/gmcli (falling back to $HOME/.local/state/gmcli). The
+// store directory holds session state, the SQLite archive, and cached media —
+// all of which are reproducible from the phone, so XDG_STATE_HOME is the
+// correct base under the spec. Matches wacli's choice.
 func Resolve(storeOverride string) (Layout, error) {
 	root := storeOverride
 	if root == "" {
@@ -51,12 +53,12 @@ func (l Layout) EnsureDirs() error {
 }
 
 func defaultRoot() (string, error) {
-	if xdg := os.Getenv("XDG_DATA_HOME"); xdg != "" {
+	if xdg := os.Getenv("XDG_STATE_HOME"); xdg != "" {
 		return filepath.Join(xdg, "gmcli"), nil
 	}
 	home, err := os.UserHomeDir()
 	if err != nil {
 		return "", fmt.Errorf("determine home dir: %w", err)
 	}
-	return filepath.Join(home, ".local", "share", "gmcli"), nil
+	return filepath.Join(home, ".local", "state", "gmcli"), nil
 }
