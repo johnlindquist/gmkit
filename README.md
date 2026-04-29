@@ -4,11 +4,12 @@ A standalone Go CLI that connects to Google Messages, archives conversations
 into a local SQLite + FTS5 database, and exposes a query surface suitable for
 shell use and LLM tool integrations.
 
-> **Status:** Phase 3. Pairing, session persistence, sync loop, and the full
-> query CLI (`messages`, `contacts`, `chats`) are all wired up. The OpenClaw
-> skill lands in Phase 4. See
+> **Status:** Feature-complete (Phases 1–4). Pairing, session persistence,
+> sync loop, query CLI (`messages`, `contacts`, `chats`), and an LLM skill
+> (`skills/google-messages`) are all wired up. See
 > [`docs/research/phase-1-libgmessages.md`](docs/research/phase-1-libgmessages.md)
-> for the design notes that motivated this layout.
+> for the design notes that motivated this layout, and
+> [`skills/README.md`](skills/README.md) for the skill installation guide.
 
 ## What it is
 
@@ -95,8 +96,21 @@ internal/
   output/             Shared JSON / tab-aligned table renderers
   paths/              XDG path resolution
   logging/            zerolog setup
+skills/
+  google-messages/    LLM skill bundle — read-only playbook for assistants
 docs/research/        Phase 1 research notes
 ```
+
+## LLM integration
+
+`skills/google-messages/SKILL.md` is a Claude Code / OpenClaw–compatible
+skill that wraps `gmcli` so an assistant can answer questions like "what
+did Alice text me about dinner?" or "search my messages for flight
+confirmation". The skill always invokes `gmcli --read-only --json`,
+includes a verb decision tree, and carries a strong prompt-injection
+preamble: untrusted message content is treated as data, never as
+instructions. See [`skills/README.md`](skills/README.md) for install
+instructions.
 
 ## Privacy
 
