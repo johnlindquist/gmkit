@@ -1,0 +1,39 @@
+gmcli — Google Messages CLI
+Copyright (C) 2026 Fred Souvenir
+
+This program is free software: you can redistribute it and/or modify it
+under the terms of the GNU Affero General Public License as published by
+the Free Software Foundation, either version 3 of the License, or (at your
+option) any later version.
+
+This program is distributed in the hope that it will be useful, but WITHOUT
+ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
+FITNESS FOR A PARTICULAR PURPOSE.  See the GNU Affero General Public
+License for more details.
+
+You should have received a copy of the GNU Affero General Public License
+along with this program. If not, see <https://www.gnu.org/licenses/>.
+
+----------------------------------------------------------------------
+
+This product includes software developed by third parties.
+
+libgm (Google Messages protocol library)
+    Source:    https://github.com/mautrix/gmessages
+    Copyright: Tulir Asokan and the mautrix contributors
+    License:   GNU Affero General Public License v3.0
+    Use:       Imported as go.mau.fi/mautrix-gmessages/pkg/libgm
+
+CLI design inspired by wacli (https://github.com/steipete/wacli) — credit to
+Peter Steinberger for the read-first messaging-CLI pattern. No code reuse;
+gmcli is an independent implementation.
+
+Architectural patterns (SQLite+FTS5 schema, MCP prompt-injection preamble,
+unified-contact mapping) inspired by openmessage
+(https://github.com/MaxGhenis/openmessage), released into the public domain
+by Max Ghenis under the Unlicense.
+
+For all other Go module dependencies and their licenses, see go.sum and
+the third_party/ directory in the source tree, or run:
+
+    go mod download && go-licenses report ./...

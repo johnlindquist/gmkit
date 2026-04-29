@@ -1,0 +1,16 @@
+# Binaries
+/gmcli
+/dist/
+*.exe
+
+# Local dev databases / sessions
+*.db
+*.db-journal
+*.db-shm
+*.db-wal
+session.json
+
+# Editor/OS noise
+.idea/
+.vscode/
+.DS_Store
