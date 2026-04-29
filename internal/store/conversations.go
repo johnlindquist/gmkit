@@ -3,6 +3,7 @@ package store
 import (
 	"context"
 	"fmt"
+	"strings"
 	"time"
 )
 
@@ -59,19 +60,77 @@ func (s *Store) UpsertConversation(ctx context.Context, c Conversation) error {
 
 // GetConversation fetches a single row. Returns sql.ErrNoRows on miss.
 func (s *Store) GetConversation(ctx context.Context, id string) (Conversation, error) {
-	var c Conversation
-	var lastMsg, updated int64
-	var isGroup, unread, pinned, archived int64
-	err := s.db.QueryRowContext(ctx, `
+	row := s.db.QueryRowContext(ctx, `
 		SELECT conversation_id, source_platform, name, is_group, participants_json,
 		       last_message_ts, unread, pinned, archived, updated_at
 		  FROM conversations
 		 WHERE conversation_id = ?
-	`, id).Scan(
+	`, id)
+	return scanConversation(row)
+}
+
+// CountConversations returns the total number of stored conversations.
+func (s *Store) CountConversations(ctx context.Context) (int, error) {
+	var n int
+	err := s.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM conversations`).Scan(&n)
+	return n, err
+}
+
+// ListConversationOpts filters and paginates ListConversations.
+type ListConversationOpts struct {
+	Limit      int  // max rows; <=0 means 50
+	UnreadOnly bool // only conversations with unread=1
+	Pinned     bool // only pinned threads
+}
+
+// ListConversations returns conversations ordered by last_message_ts DESC.
+func (s *Store) ListConversations(ctx context.Context, opts ListConversationOpts) ([]Conversation, error) {
+	limit := opts.Limit
+	if limit <= 0 {
+		limit = 50
+	}
+	q := `
+		SELECT conversation_id, source_platform, name, is_group, participants_json,
+		       last_message_ts, unread, pinned, archived, updated_at
+		  FROM conversations`
+	var clauses []string
+	if opts.UnreadOnly {
+		clauses = append(clauses, "unread = 1")
+	}
+	if opts.Pinned {
+		clauses = append(clauses, "pinned = 1")
+	}
+	if len(clauses) > 0 {
+		q += " WHERE " + strings.Join(clauses, " AND ")
+	}
+	q += " ORDER BY last_message_ts DESC, updated_at DESC LIMIT ?"
+	rows, err := s.db.QueryContext(ctx, q, limit)
+	if err != nil {
+		return nil, fmt.Errorf("list conversations: %w", err)
+	}
+	defer rows.Close()
+	var out []Conversation
+	for rows.Next() {
+		c, err := scanConversation(rows)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, c)
+	}
+	return out, rows.Err()
+}
+
+// scanConversation reads a single row in the canonical column order. Used by
+// both GetConversation and ListConversations.
+func scanConversation(r interface {
+	Scan(...any) error
+}) (Conversation, error) {
+	var c Conversation
+	var lastMsg, updated, isGroup, unread, pinned, archived int64
+	if err := r.Scan(
 		&c.ID, &c.SourcePlatform, &c.Name, &isGroup, &c.ParticipantsJSON,
 		&lastMsg, &unread, &pinned, &archived, &updated,
-	)
-	if err != nil {
+	); err != nil {
 		return Conversation{}, err
 	}
 	c.IsGroup = isGroup != 0
@@ -81,13 +140,6 @@ func (s *Store) GetConversation(ctx context.Context, id string) (Conversation, e
 	c.LastMessageTimeMS = lastMsg
 	c.UpdatedAt = time.UnixMilli(updated)
 	return c, nil
-}
-
-// CountConversations returns the total number of stored conversations.
-func (s *Store) CountConversations(ctx context.Context) (int, error) {
-	var n int
-	err := s.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM conversations`).Scan(&n)
-	return n, err
 }
 
 func boolToInt(b bool) int {

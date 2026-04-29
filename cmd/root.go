@@ -3,7 +3,6 @@ package cmd
 
 import (
 	"context"
-	"fmt"
 	"os"
 	"os/signal"
 	"syscall"
@@ -13,6 +12,7 @@ import (
 
 	"github.com/fdsouvenir/gmcli/internal/logging"
 	"github.com/fdsouvenir/gmcli/internal/paths"
+	"github.com/fdsouvenir/gmcli/internal/store"
 )
 
 // globalFlags is populated by persistent flags on the root command and
@@ -44,7 +44,20 @@ func Root() *cobra.Command {
 	root.AddCommand(syncCmd())
 	root.AddCommand(versionCmd())
 	root.AddCommand(doctorCmd())
+	root.AddCommand(messagesCmd())
+	root.AddCommand(contactsCmd())
+	root.AddCommand(chatsCmd())
 	return root
+}
+
+// openStore resolves the layout and opens the SQLite store for query
+// commands. Caller must Close.
+func openStore() (*store.Store, error) {
+	layout, err := resolveLayout()
+	if err != nil {
+		return nil, err
+	}
+	return store.Open(context.Background(), layout.Database)
 }
 
 // resolveLayout applies --store and ensures the directory tree exists.
@@ -80,13 +93,3 @@ func signalContext(parent context.Context) (context.Context, context.CancelFunc)
 	return ctx, cancel
 }
 
-// dieIfErr writes err to stderr and exits non-zero. Used as the very last
-// step in command Runs so cobra doesn't print its own usage on operational
-// failures.
-func dieIfErr(err error) {
-	if err == nil {
-		return
-	}
-	fmt.Fprintln(os.Stderr, "gmcli:", err)
-	os.Exit(1)
-}

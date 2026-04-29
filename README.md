@@ -4,8 +4,9 @@ A standalone Go CLI that connects to Google Messages, archives conversations
 into a local SQLite + FTS5 database, and exposes a query surface suitable for
 shell use and LLM tool integrations.
 
-> **Status:** Phase 2 scaffold. Pairing, session persistence, and a sync loop
-> are wired up; the full query CLI lands in Phase 3. See
+> **Status:** Phase 3. Pairing, session persistence, sync loop, and the full
+> query CLI (`messages`, `contacts`, `chats`) are all wired up. The OpenClaw
+> skill lands in Phase 4. See
 > [`docs/research/phase-1-libgmessages.md`](docs/research/phase-1-libgmessages.md)
 > for the design notes that motivated this layout.
 
@@ -59,10 +60,18 @@ gmcli auth
 #    the connection open and writes new messages as they arrive.
 gmcli sync --follow
 
-# 3. (Phase 3) Query.
-gmcli messages search "dinner"
-gmcli contacts search alice
-gmcli chats list
+# 3. Query the local archive.
+gmcli chats list                              # most-recent conversations
+gmcli chats show <conversation-id>            # header + recent messages
+gmcli messages search "dinner"                # FTS5 across all conversations
+gmcli messages list --conv <conv-id>          # message list with filters
+gmcli messages show <message-id>              # single message detail
+gmcli messages context <message-id>           # surrounding messages
+gmcli contacts search alice                   # name/number substring match
+gmcli contacts show <participant-id-or-num>   # contact detail
+
+# Every query supports --json for machine-readable output.
+gmcli --json chats list | jq '.[0].name'
 ```
 
 ## Global flags
@@ -77,11 +86,13 @@ gmcli chats list
 ## Layout
 
 ```
-cmd/                  Cobra command tree (auth, sync, version, doctor)
+cmd/                  Cobra command tree (auth, sync, version, doctor,
+                      messages, contacts, chats)
 internal/
   gm/                 libgm wrapper — pairing, session persistence, events
   store/              SQLite + FTS5 store (schema, queries, migrations)
   sync/               Event-to-store pump
+  output/             Shared JSON / tab-aligned table renderers
   paths/              XDG path resolution
   logging/            zerolog setup
 docs/research/        Phase 1 research notes

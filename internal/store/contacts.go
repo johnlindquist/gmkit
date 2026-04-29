@@ -2,7 +2,10 @@ package store
 
 import (
 	"context"
+	"database/sql"
+	"errors"
 	"fmt"
+	"strings"
 	"time"
 )
 
@@ -60,3 +63,93 @@ func (s *Store) CountContacts(ctx context.Context) (int, error) {
 	err := s.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM contacts`).Scan(&n)
 	return n, err
 }
+
+// SearchContacts returns contacts matching query against name/e164/formatted_number
+// using a case-insensitive substring match. Limit <=0 means 50.
+func (s *Store) SearchContacts(ctx context.Context, query string, limit int) ([]Contact, error) {
+	if limit <= 0 {
+		limit = 50
+	}
+	q := `
+		SELECT participant_id, source_platform, contact_id, name, e164,
+		       formatted_number, avatar_color, is_me
+		  FROM contacts`
+	var args []any
+	if query != "" {
+		// Match against any of the user-visible fields. SQLite LIKE is
+		// case-insensitive for ASCII by default; for non-ASCII names we'd
+		// need an ICU-aware collation, which modernc.org/sqlite doesn't
+		// ship — acceptable for the scaffold.
+		like := "%" + strings.ReplaceAll(strings.ReplaceAll(query, `\`, `\\`), `%`, `\%`) + "%"
+		q += `
+		 WHERE name LIKE ? ESCAPE '\'
+		    OR e164 LIKE ? ESCAPE '\'
+		    OR formatted_number LIKE ? ESCAPE '\'`
+		args = append(args, like, like, like)
+	}
+	q += " ORDER BY name COLLATE NOCASE ASC LIMIT ?"
+	args = append(args, limit)
+
+	rows, err := s.db.QueryContext(ctx, q, args...)
+	if err != nil {
+		return nil, fmt.Errorf("search contacts: %w", err)
+	}
+	defer rows.Close()
+	var out []Contact
+	for rows.Next() {
+		c, err := scanContact(rows)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, c)
+	}
+	return out, rows.Err()
+}
+
+// GetContact looks up a contact by participant_id (exact). For phone-number
+// or contact_id lookup, see GetContactByNumber. Returns ErrNotFound on miss.
+func (s *Store) GetContact(ctx context.Context, participantID string) (Contact, error) {
+	row := s.db.QueryRowContext(ctx, `
+		SELECT participant_id, source_platform, contact_id, name, e164,
+		       formatted_number, avatar_color, is_me
+		  FROM contacts
+		 WHERE participant_id = ?`, participantID)
+	c, err := scanContact(row)
+	if errors.Is(err, sql.ErrNoRows) {
+		return Contact{}, ErrNotFound
+	}
+	return c, err
+}
+
+// GetContactByNumber finds the first contact whose e164 or formatted_number
+// matches the given query exactly. Used by `gmcli contacts show` to accept
+// either a participant_id or a phone number.
+func (s *Store) GetContactByNumber(ctx context.Context, number string) (Contact, error) {
+	row := s.db.QueryRowContext(ctx, `
+		SELECT participant_id, source_platform, contact_id, name, e164,
+		       formatted_number, avatar_color, is_me
+		  FROM contacts
+		 WHERE e164 = ? OR formatted_number = ?
+		 LIMIT 1`, number, number)
+	c, err := scanContact(row)
+	if errors.Is(err, sql.ErrNoRows) {
+		return Contact{}, ErrNotFound
+	}
+	return c, err
+}
+
+func scanContact(r interface {
+	Scan(...any) error
+}) (Contact, error) {
+	var c Contact
+	var isMe int64
+	if err := r.Scan(
+		&c.ParticipantID, &c.SourcePlatform, &c.ContactID, &c.Name, &c.E164,
+		&c.FormattedNumber, &c.AvatarColor, &isMe,
+	); err != nil {
+		return Contact{}, err
+	}
+	c.IsMe = isMe != 0
+	return c, nil
+}
+
