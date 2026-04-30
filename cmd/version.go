@@ -9,9 +9,9 @@ import (
 	"github.com/spf13/cobra"
 )
 
-// Version is the gmcli release tag.
-// Override at link time with `-ldflags "-X github.com/fdsouvenir/gmcli/cmd.Version=vX.Y.Z"`.
-var Version = "v0.1.1-alpha"
+// Version is overridden for release builds with:
+// -ldflags "-X github.com/fdsouvenir/gmcli/cmd.Version=vX.Y.Z"
+var Version = "dev"
 
 const licenseNotice = "gmcli is licensed under GNU AGPL-3.0. " +
 	"It depends on libgm from mautrix/gmessages (AGPL-3.0, " +
@@ -62,6 +62,9 @@ func buildInfo() versionInfo {
 	}
 	if bi, ok := debug.ReadBuildInfo(); ok {
 		info.GoVer = bi.GoVersion
+		if info.Version == "dev" && bi.Main.Version != "" && bi.Main.Version != "(devel)" {
+			info.Version = bi.Main.Version
+		}
 		for _, s := range bi.Settings {
 			switch s.Key {
 			case "vcs.revision":

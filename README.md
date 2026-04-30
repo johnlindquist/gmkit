@@ -49,6 +49,13 @@ cd gmcli
 go build -o gmcli .
 ```
 
+For a source build whose `gmcli version` output includes the current tag or
+commit, inject it at link time:
+
+```sh
+go build -ldflags "-X github.com/fdsouvenir/gmcli/cmd.Version=$(git describe --tags --always --dirty)" -o gmcli .
+```
+
 A pre-built binary distribution and Homebrew formula will land alongside the
 v0.1 release.
 
