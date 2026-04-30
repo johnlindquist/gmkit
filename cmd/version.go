@@ -9,9 +9,9 @@ import (
 	"github.com/spf13/cobra"
 )
 
-// Version is the gmcli release tag. Phase 2 is pre-release (no tag yet).
+// Version is the gmcli release tag.
 // Override at link time with `-ldflags "-X github.com/fdsouvenir/gmcli/cmd.Version=vX.Y.Z"`.
-var Version = "0.0.0-dev"
+var Version = "v0.1.0-alpha"
 
 const licenseNotice = "gmcli is licensed under GNU AGPL-3.0. " +
 	"It depends on libgm from mautrix/gmessages (AGPL-3.0, " +
