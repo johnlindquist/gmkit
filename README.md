@@ -46,7 +46,7 @@ Requires Go 1.24 or newer.
 ```sh
 git clone https://github.com/fdsouvenir/gmcli
 cd gmcli
-go build -o gmcli ./...
+go build -o gmcli .
 ```
 
 A pre-built binary distribution and Homebrew formula will land alongside the
