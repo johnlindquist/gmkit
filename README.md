@@ -4,11 +4,11 @@ A standalone Go CLI that connects to Google Messages, archives conversations
 into a local SQLite + FTS5 database, and exposes a query surface suitable for
 shell use and LLM tool integrations.
 
-> **Status:** v0.1.1-alpha. Pairing, session persistence, sync loop, query
-> CLI (`messages`, `contacts`, `chats`), best-effort history backfill, send
+> **Status:** alpha. Pairing, session persistence, sync loop, query CLI
+> (`messages`, `contacts`, `chats`), best-effort history backfill, send
 > commands, media download, and an LLM skill (`skills/google-messages`) are
-> wired up. The automated test suite passes, but the current release should
-> be treated as alpha until it has broader live-device testing. See
+> wired up. The automated test suite passes, but gmcli should be treated as
+> alpha until it has broader live-device testing. See
 > [`docs/research/phase-1-libgmessages.md`](docs/research/phase-1-libgmessages.md)
 > for the design notes that motivated this layout, and
 > [`skills/README.md`](skills/README.md) for the skill installation guide.
