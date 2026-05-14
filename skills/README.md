@@ -46,7 +46,7 @@ If the assistant runs in a sandbox, ensure `gmcli` is on the sandbox's
 `PATH` and that the sandbox can read `$XDG_STATE_HOME/gmcli` (or the
 directory passed via `--store`).
 
-## ClawHub publishing
+## Maintainer ClawHub Publishing
 
 The gmcli repository is the canonical source for the ClawHub listing. Publish
 directly from `skills/google-messages`; do not publish a staged copy.

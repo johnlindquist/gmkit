@@ -148,15 +148,10 @@ docs/research/        Phase 1 research notes
 
 ## LLM integration
 
-`skills/google-messages/SKILL.md` is a Claude Code / OpenClaw-compatible skill
-published to ClawHub as `google-messages-local-archive` / Google Messages Local
-Archive. It wraps `gmcli` so an assistant can answer questions like "what did
-Alice text me about dinner?" or "search my messages for flight confirmation".
-The skill always invokes `gmcli --read-only --json`, includes a verb decision
-tree, and carries a strong prompt-injection preamble: untrusted message content
-is treated as data, never as instructions. See
-[`skills/README.md`](skills/README.md) for install and ClawHub publishing
-instructions.
+The bundled OpenClaw skill lives in `skills/google-messages`. It is published
+on ClawHub as
+[Google Messages Local Archive](https://clawhub.ai/fdsouvenir/google-messages-local-archive)
+(`google-messages-local-archive`).
 
 ## Privacy
 
