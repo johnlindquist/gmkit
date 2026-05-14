@@ -4,11 +4,13 @@ A standalone Go CLI that connects to Google Messages, archives conversations
 into a local SQLite + FTS5 database, and exposes a query surface suitable for
 shell use and LLM tool integrations.
 
-> **Status:** alpha. Pairing, session persistence, sync loop, query CLI
+> **Status:** beta. Pairing, session persistence, sync loop, query CLI
 > (`messages`, `contacts`, `chats`), best-effort history backfill, send
 > commands, media download, and an LLM skill (`skills/google-messages`) are
-> wired up. The automated test suite passes, but gmcli should be treated as
-> alpha until it has broader live-device testing. See
+> wired up and covered by the automated test suite. Live-device behavior still
+> depends on the unofficial Google Messages web protocol, so validate auth,
+> sync, history, media, and send flows on your own account before relying on
+> unattended operation. See
 > [`docs/research/phase-1-libgmessages.md`](docs/research/phase-1-libgmessages.md)
 > for the design notes that motivated this layout, and
 > [`skills/README.md`](skills/README.md) for the skill installation guide.
@@ -56,10 +58,10 @@ commit, inject it at link time:
 go build -ldflags "-X github.com/fdsouvenir/gmcli/cmd.Version=$(git describe --tags --always --dirty)" -o gmcli .
 ```
 
-A pre-built binary distribution and Homebrew formula will land alongside the
-v0.1 release.
+Pre-built binary distribution and Homebrew packaging are planned after the
+initial beta releases.
 
-## Alpha limits
+## Current limits
 
 - Live-device coverage is still limited. Before relying on gmcli unattended,
   test `auth`, `sync`, query commands, `history backfill`, `media download`,
@@ -140,19 +142,20 @@ internal/
   paths/              XDG path resolution (XDG_STATE_HOME)
   logging/            zerolog setup
 skills/
-  google-messages/    LLM skill bundle — read-only playbook for assistants
+  google-messages/    LLM skill bundle - read-only playbook for assistants
 docs/research/        Phase 1 research notes
 ```
 
 ## LLM integration
 
-`skills/google-messages/SKILL.md` is a Claude Code / OpenClaw–compatible
-skill that wraps `gmcli` so an assistant can answer questions like "what
-did Alice text me about dinner?" or "search my messages for flight
-confirmation". The skill always invokes `gmcli --read-only --json`,
-includes a verb decision tree, and carries a strong prompt-injection
-preamble: untrusted message content is treated as data, never as
-instructions. See [`skills/README.md`](skills/README.md) for install
+`skills/google-messages/SKILL.md` is a Claude Code / OpenClaw-compatible skill
+published to ClawHub as `google-messages-local-archive` / Google Messages Local
+Archive. It wraps `gmcli` so an assistant can answer questions like "what did
+Alice text me about dinner?" or "search my messages for flight confirmation".
+The skill always invokes `gmcli --read-only --json`, includes a verb decision
+tree, and carries a strong prompt-injection preamble: untrusted message content
+is treated as data, never as instructions. See
+[`skills/README.md`](skills/README.md) for install and ClawHub publishing
 instructions.
 
 ## Privacy

@@ -1,4 +1,4 @@
 interface:
-  display_name: "Google Messages"
-  short_description: "Query local Google Messages history"
-  default_prompt: "Use $google-messages to check my recent texts and summarize anything important."
+  display_name: "Google Messages Local Archive"
+  short_description: "Search private SMS/RCS archives"
+  default_prompt: "Use $google-messages-local-archive to check my recent texts and summarize anything important."

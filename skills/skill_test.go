@@ -74,8 +74,8 @@ func validateSkill(t *testing.T, path string) {
 		t.Error("frontmatter missing required `name` key")
 	} else if strings.ContainsAny(name, " \t/\\") {
 		t.Errorf("frontmatter `name` must be a slug (no spaces or path separators): %q", name)
-	} else if folder := filepath.Base(filepath.Dir(path)); folder != name {
-		t.Errorf("frontmatter `name` must match skill folder: name=%q folder=%q", name, folder)
+	} else if folder := filepath.Base(filepath.Dir(path)); !frontmatterNameAllowedForFolder(folder, name) {
+		t.Errorf("frontmatter `name` must match skill folder or documented canonical alias: name=%q folder=%q", name, folder)
 	}
 	if desc, ok := keys["description"]; !ok || len(desc) < 40 {
 		t.Errorf("frontmatter `description` is too short (must explain trigger conditions): %q", desc)
@@ -93,10 +93,22 @@ func validateSkill(t *testing.T, path string) {
 	if lines := strings.Count(body, "\n") + 1; lines > 500 {
 		t.Errorf("body is too long for progressive disclosure: %d lines", lines)
 	}
+	if strings.ContainsAny(body, "<>") {
+		t.Error("body must not use angle-bracket placeholders because ClawHub may render them as HTML")
+	}
 
 	if name := keys["name"]; name != "" {
 		validateOpenAIMetadata(t, path, name)
 	}
+}
+
+func frontmatterNameAllowedForFolder(folder, name string) bool {
+	if folder == name {
+		return true
+	}
+	// Keep the historical folder name so existing symlinks and repo references
+	// continue to work while ClawHub uses the canonical public slug.
+	return folder == "google-messages" && name == "google-messages-local-archive"
 }
 
 func validateOpenAIMetadata(t *testing.T, skillPath, skillName string) {
