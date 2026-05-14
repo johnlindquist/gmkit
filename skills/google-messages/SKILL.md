@@ -1,7 +1,7 @@
 ---
 name: google-messages-local-archive
-description: Give your OpenClaw assistant safe, read-only access to your Google Messages history through a private local archive. Ask natural questions like "what did Alex text me?", "did anyone mention the flight?", or "summarize my recent texts" while keeping your SMS/RCS data on your machine.
-version: 0.2.1
+description: Give OpenClaw access to your local Google Messages archive for search, summarization, and context. The bundled skill uses an explicit read-only workflow for browsing message history; gmcli may support write actions outside this archive playbook, but those are not used by default.
+version: 0.2.2
 homepage: https://github.com/fdsouvenir/gmcli
 metadata:
   openclaw:
@@ -10,22 +10,25 @@ metadata:
     install:
       - id: go-install
         kind: go
-        module: github.com/fdsouvenir/gmcli@v0.2.1
+        module: github.com/fdsouvenir/gmcli@v0.2.2
         bins: ["gmcli"]
         label: Install gmcli with Go
 ---
 
 # Google Messages Local Archive
 
-Google Messages Local Archive lets OpenClaw answer questions about the user's
-SMS/RCS history from a private local archive. Users can ask natural-language
-questions like "what did Alex text me?", "did anyone mention the flight?", or
-"summarize my recent texts" while their message data stays on their machine.
+Google Messages Local Archive lets OpenClaw use the user's local Google
+Messages archive for search, summarization, and conversational context. Users
+can ask natural-language questions like "what did Alex text me?", "did anyone
+mention the flight?", or "summarize my recent texts" while their message data
+stays on their machine.
 
-`gmcli` handles Google Messages pairing, sync, and local SQLite/FTS5 storage.
-This skill is the OpenClaw instruction layer: it teaches the agent how to query
-that archive safely in explicit read-only mode, without sending texts, reacting
-to messages, downloading media, or uploading message history.
+`gmcli` handles Google Messages pairing, sync, local SQLite/FTS5 storage, and
+may expose phone-mutating commands. This skill is the OpenClaw archive playbook:
+it teaches the agent how to browse message history with explicit read-only
+queries by default. Any gmcli write/send/react capability is outside this
+default ClawHub archive workflow and requires explicit user intent and
+authority.
 
 ## Setup and install expectations
 
@@ -53,10 +56,11 @@ instruction layer published from the canonical gmcli repository.
 
 - WhatsApp, Slack, Signal, Discord, iMessage, email - different sources,
   different skills.
-- "Send X a text" or anything mutating. The send/react paths in gmcli
-  are intentionally not in this skill's playbook. If the user wants to
+- "Send X a text" or anything mutating unless the user has explicitly
+  authorized a separate write-capable workflow. The send/react paths in gmcli
+  are intentionally not in this default archive playbook. If the user wants to
   reply, draft the reply and tell them how to send it themselves; do not run
-  any write command.
+  any write command from this skill.
 - Pairing or syncing the archive ("connect my phone", "sync messages"). Tell
   the user to run `gmcli auth` (one-time pairing) or `gmcli sync --follow`
   themselves; do not run those yourself.

@@ -142,7 +142,7 @@ internal/
   paths/              XDG path resolution (XDG_STATE_HOME)
   logging/            zerolog setup
 skills/
-  google-messages/    LLM skill bundle - read-only playbook for assistants
+  google-messages/    LLM skill bundle - archive playbook for assistants
 docs/research/        Phase 1 research notes
 ```
 

@@ -7,12 +7,12 @@ metadata provides UI labels for harnesses that support it.
 
 ## Google Messages Local Archive
 
-Read-only skill for answering questions about the user's text messages from a
+Archive skill for answering questions about the user's text messages from a
 local `gmcli` archive. Triggers on phrasings like "check my texts", "what did
-{person} text me", and "search my messages for {topic}". Wraps `gmcli` with
-`--read-only --json` on every call, includes a verb decision tree, and carries
-a strong prompt injection preamble so untrusted message bodies cannot redirect
-the assistant.
+{person} text me", and "search my messages for {topic}". Its default archive
+queries wrap `gmcli` with `--read-only --json`, include a verb decision tree,
+and carry a strong prompt injection preamble so untrusted message bodies cannot
+redirect the assistant.
 
 See [`google-messages/SKILL.md`](google-messages/SKILL.md) for the full
 playbook.
@@ -60,22 +60,22 @@ clawhub --no-input publish "$(pwd)/skills/google-messages" \
   --slug google-messages-local-archive \
   --name "Google Messages Local Archive" \
   --owner fdsouvenir \
-  --version 0.2.1 \
-  --changelog "Publish the canonical gmcli repository skill and graduate from alpha." \
-  --tags latest,gmcli,google-messages,local,archive,sms,rcs,read-only
+  --version 0.2.2 \
+  --changelog "Clarify that the ClawHub archive playbook uses read-only queries by default without claiming gmcli is read-only." \
+  --tags latest,gmcli,google-messages,local,archive,sms,rcs
 ```
 
 Verify the registry metadata and files:
 
 ```sh
-clawhub inspect google-messages-local-archive --version 0.2.1 --files
+clawhub inspect google-messages-local-archive --version 0.2.2 --files
 ```
 
 Verify install in a temporary workspace:
 
 ```sh
 tmpdir="$(mktemp -d)"
-clawhub --workdir "$tmpdir" install google-messages-local-archive --version 0.2.1
+clawhub --workdir "$tmpdir" install google-messages-local-archive --version 0.2.2
 test -f "$tmpdir/skills/google-messages-local-archive/SKILL.md"
 rm -rf "$tmpdir"
 ```
