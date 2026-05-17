@@ -7,12 +7,13 @@ metadata provides UI labels for harnesses that support it.
 
 ## Google Messages Local Archive
 
-Archive skill for answering questions about the user's text messages from a
-local `gmcli` archive. Triggers on phrasings like "check my texts", "what did
-{person} text me", and "search my messages for {topic}". Its default archive
-queries wrap `gmcli` with `--read-only --json`, include a verb decision tree,
-and carry a strong prompt injection preamble so untrusted message bodies cannot
-redirect the assistant.
+Archive skill for searching, summarizing, and answering questions about the
+user's text messages from a local `gmcli` archive. Triggers on phrasings like
+"check my texts", "summarize my recent texts", "what did {person} text me",
+and "search my messages for {topic}". Its default archive queries wrap `gmcli`
+with `--read-only --json`, include a verb decision tree, and carry a strong
+prompt injection preamble so untrusted message bodies cannot redirect the
+assistant.
 
 See [`google-messages/SKILL.md`](google-messages/SKILL.md) for the full
 playbook.
@@ -51,31 +52,31 @@ directory passed via `--store`).
 The gmcli repository is the canonical source for the ClawHub listing. Publish
 directly from `skills/google-messages`; do not publish a staged copy.
 
-From the repository root, after the matching gmcli release tag exists. Use the
-absolute path because ClawHub resolves relative publish paths through its
-configured skills directory:
+From the repository root, after the `gmcli` release tag referenced by the
+installer metadata exists. Use the absolute path because ClawHub resolves
+relative publish paths through its configured skills directory:
 
 ```sh
-clawhub --no-input publish "$(pwd)/skills/google-messages" \
+clawhub skill publish "$(pwd)/skills/google-messages" \
   --slug google-messages-local-archive \
   --name "Google Messages Local Archive" \
   --owner fdsouvenir \
-  --version 0.2.2 \
-  --changelog "Clarify that the ClawHub archive playbook uses read-only queries by default without claiming gmcli is read-only." \
-  --tags latest,gmcli,google-messages,local,archive,sms,rcs
+  --version 0.2.3 \
+  --changelog "Lead with search and summarization examples, add local-first trust signals, and improve ClawHub discovery copy." \
+  --tags latest,gmcli,google-messages,local,archive,sms,rcs,search,summarize,privacy
 ```
 
 Verify the registry metadata and files:
 
 ```sh
-clawhub inspect google-messages-local-archive --version 0.2.2 --files
+clawhub inspect google-messages-local-archive --version 0.2.3 --files
 ```
 
 Verify install in a temporary workspace:
 
 ```sh
 tmpdir="$(mktemp -d)"
-clawhub --workdir "$tmpdir" install google-messages-local-archive --version 0.2.2
+clawhub --workdir "$tmpdir" install google-messages-local-archive --version 0.2.3
 test -f "$tmpdir/skills/google-messages-local-archive/SKILL.md"
 rm -rf "$tmpdir"
 ```

@@ -1,7 +1,7 @@
 ---
 name: google-messages-local-archive
-description: Give OpenClaw access to your local Google Messages archive for search, summarization, and context. The bundled skill uses an explicit read-only workflow for browsing message history; gmcli may support write actions outside this archive playbook, but those are not used by default.
-version: 0.2.2
+description: Search and summarize your local Google Messages SMS/RCS history from OpenClaw. Ask who said what, find old texts, and get conversation context while your message archive stays on your machine and the bundled workflow stays read-only by default.
+version: 0.2.3
 homepage: https://github.com/fdsouvenir/gmcli
 metadata:
   openclaw:
@@ -17,11 +17,17 @@ metadata:
 
 # Google Messages Local Archive
 
-Google Messages Local Archive lets OpenClaw use the user's local Google
-Messages archive for search, summarization, and conversational context. Users
-can ask natural-language questions like "what did Alex text me?", "did anyone
-mention the flight?", or "summarize my recent texts" while their message data
-stays on their machine.
+Ask natural-language questions over your local Google Messages archive:
+
+- "What did Alex text me yesterday?"
+- "Summarize my recent texts with Sam."
+- "Find messages about the flight."
+- "Who mentioned the invoice?"
+
+Google Messages Local Archive lets OpenClaw search, summarize, and answer
+questions from your local SMS/RCS history. Find old texts, recap
+conversations, and add message context to your workflow while keeping your
+archive on your machine.
 
 `gmcli` handles Google Messages pairing, sync, local SQLite/FTS5 storage, and
 may expose phone-mutating commands. This skill is the OpenClaw archive playbook:
@@ -42,6 +48,13 @@ service themselves.
 `gmcli` itself is AGPL-3.0 because it depends on
 `mautrix/gmessages`/`libgm`. This ClawHub skill bundle is only the OpenClaw
 instruction layer published from the canonical gmcli repository.
+
+## Best for
+
+- Local Google Messages, SMS, and RCS archive search
+- Conversation summaries and recent text recaps
+- Personal context from message history
+- Read-only, local-first workflows where no cloud sync is required
 
 ## When to use
 
@@ -218,6 +231,12 @@ clear which content came from messages versus your own analysis.
   Do not retry with different arguments unless the user asks.
 
 ## Examples
+
+**User: "Summarize my recent texts with Jordan."**
+
+Assistant: Jordan asked about dinner plans, followed up on a delayed package,
+and wanted to reschedule Friday's call. Jordan asked you to confirm by tomorrow
+morning.
 
 **User: "Did Alice text me about dinner?"**
 

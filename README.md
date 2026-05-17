@@ -151,7 +151,9 @@ docs/research/        Phase 1 research notes
 The bundled OpenClaw skill lives in `skills/google-messages`. It is published
 on ClawHub as
 [Google Messages Local Archive](https://clawhub.ai/fdsouvenir/google-messages-local-archive)
-(`google-messages-local-archive`).
+(`google-messages-local-archive`) for searching, summarizing, and answering
+questions from a local Google Messages SMS/RCS archive with read-only commands
+by default.
 
 ## Privacy
 
