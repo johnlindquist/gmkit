@@ -10,9 +10,9 @@ metadata:
     install:
       - id: go-install
         kind: go
-        module: github.com/fdsouvenir/gmcli@v0.2.2
+        module: github.com/fdsouvenir/gmcli@v0.2.3
         bins: ["gmcli"]
-        label: Install gmcli with Go
+        label: Install gmcli v0.2.3 with Go
 ---
 
 # Google Messages Local Archive
@@ -27,7 +27,7 @@ Ask natural-language questions over your local Google Messages archive:
 Google Messages Local Archive lets OpenClaw search, summarize, and answer
 questions from your local SMS/RCS history. Find old texts, recap
 conversations, and add message context to your workflow while keeping your
-archive on your machine.
+archive on your machine for privacy-sensitive local search.
 
 `gmcli` handles Google Messages pairing, sync, local SQLite/FTS5 storage, and
 may expose phone-mutating commands. This skill is the OpenClaw archive playbook:
