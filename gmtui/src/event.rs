@@ -9,18 +9,21 @@ use tokio::sync::mpsc;
 
 use crate::app::AppEvent;
 use crate::model::ServerEvent;
+use crate::rpc::RpcClient;
 
-#[derive(Debug)]
 pub enum Event {
     Tick,
     Term(crossterm::event::Event),
     App(AppEvent),
+    /// The background reconnect loop established a fresh daemon connection.
+    Reconnected(RpcClient),
 }
 
-/// Spawn the tasks that feed the main event channel.
-pub fn start(
-    mut server_events: mpsc::UnboundedReceiver<ServerEvent>,
-) -> (
+/// Spawn the terminal-input/tick task and the app-event adapter. Daemon
+/// event streams are attached separately (and re-attached on reconnect)
+/// with [attach_server_events].
+pub fn start() -> (
+    mpsc::UnboundedSender<Event>,
     mpsc::UnboundedSender<AppEvent>,
     mpsc::UnboundedReceiver<Event>,
 ) {
@@ -53,16 +56,6 @@ pub fn start(
         }
     });
 
-    // Daemon-pushed events.
-    let server_tx = tx.clone();
-    tokio::spawn(async move {
-        while let Some(ev) = server_events.recv().await {
-            if server_tx.send(Event::App(AppEvent::Server(ev))).is_err() {
-                break;
-            }
-        }
-    });
-
     // App-task results ride the same channel through this adapter.
     let (app_tx, mut app_rx) = mpsc::unbounded_channel::<AppEvent>();
     let adapter_tx = tx.clone();
@@ -74,5 +67,22 @@ pub fn start(
         }
     });
 
-    (app_tx, rx)
+    (tx, app_tx, rx)
+}
+
+/// Forward daemon-pushed events onto the main channel. When the stream ends
+/// — the socket died or the daemon exited — emit DaemonLost so the app can
+/// start reconnecting.
+pub fn attach_server_events(
+    tx: mpsc::UnboundedSender<Event>,
+    mut server_events: mpsc::UnboundedReceiver<ServerEvent>,
+) {
+    tokio::spawn(async move {
+        while let Some(ev) = server_events.recv().await {
+            if tx.send(Event::App(AppEvent::Server(ev))).is_err() {
+                return;
+            }
+        }
+        let _ = tx.send(Event::App(AppEvent::DaemonLost));
+    });
 }

@@ -136,6 +136,9 @@ pub struct Approval {
 pub struct DaemonStatus {
     #[serde(default)]
     pub connected: bool,
+    /// Daemon deliberately running without a phone connection (--offline).
+    #[serde(default)]
+    pub offline: bool,
     #[serde(default)]
     pub send_mode: String,
     #[serde(default)]

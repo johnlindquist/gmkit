@@ -604,10 +604,20 @@ fn render_compose(frame: &mut Frame, app: &App, area: Rect) {
 }
 
 fn render_status(frame: &mut Frame, app: &App, area: Rect) {
-    let conn = if app.status.connected {
+    let conn = if app.daemon_lost {
+        Span::styled(
+            "○ daemon lost — restarting it now…",
+            Style::default().fg(WARN).add_modifier(Modifier::BOLD),
+        )
+    } else if app.status.connected {
         Span::styled("● connected", Style::default().fg(ME))
+    } else if app.status.offline {
+        Span::styled("◌ offline archive (no phone)", Style::default().fg(DIM))
     } else {
-        Span::styled("○ disconnected", Style::default().fg(WARN))
+        Span::styled(
+            "○ phone relay down — auto-retrying · check phone is online; `gmcli auth` if pairing expired",
+            Style::default().fg(WARN),
+        )
     };
     let mode = match app.status.send_mode.as_str() {
         "approve" => Span::styled(" · sends: approve", Style::default().fg(ACCENT)),

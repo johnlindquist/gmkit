@@ -103,6 +103,7 @@ func (s *Server) handleStatus(ctx context.Context) (any, *Error) {
 	}
 	return map[string]any{
 		"connected":         connected,
+		"offline":           s.deps.Client == nil,
 		"send_mode":         s.deps.SendMode,
 		"pending_approvals": len(pending),
 		"conversations":     conversations,

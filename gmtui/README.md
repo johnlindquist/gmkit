@@ -52,6 +52,16 @@ opens a chat, or opens a message hit in its full context. `Esc` drops into
 the classic two-pane browse layout; `/` gets you back to search from
 anywhere.
 
+## Connection self-healing
+
+The status bar always tells you the truth and gmtui fixes problems itself:
+daemon status is re-polled every ~10s, and if the daemon exits or crashes,
+gmtui restarts it and reconnects automatically (with backoff), refetching
+everything once it's back. `● connected` / `◌ offline archive` /
+`○ phone relay down — auto-retrying` (with what to check) /
+`○ daemon lost — restarting it now…` are the four states; none of them
+need manual intervention. Press `r` in browse mode to force a refresh.
+
 ## Fresh data & notifications
 
 On connect, gmtui asks the daemon to pull the latest messages from your

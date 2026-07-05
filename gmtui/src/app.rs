@@ -41,6 +41,8 @@ pub enum AppEvent {
     Status(DaemonStatus),
     Flash(String),
     Server(ServerEvent),
+    /// The daemon socket closed (daemon exited or crashed).
+    DaemonLost,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -105,6 +107,11 @@ pub struct App {
     pub should_quit: bool,
     /// Ring the terminal bell on the next draw (incoming message).
     bell: bool,
+    /// The daemon socket is gone; a background loop is bringing it back.
+    pub daemon_lost: bool,
+    /// A reconnect task is already running (main loop's guard).
+    pub reconnecting: bool,
+    ticks: u64,
 
     pub focus: Focus,
     pub omni: OmniState,
@@ -137,6 +144,9 @@ impl App {
             tx,
             should_quit: false,
             bell: false,
+            daemon_lost: false,
+            reconnecting: false,
+            ticks: 0,
             focus: Focus::Omni,
             omni: OmniState::default(),
             preview_cache: std::collections::HashMap::new(),
@@ -536,6 +546,7 @@ impl App {
     // ---- event handling -------------------------------------------------
 
     pub fn on_tick(&mut self) {
+        self.ticks += 1;
         if let Some((_, at)) = self.flash {
             if now_ms() - at > 5000 {
                 self.flash = None;
@@ -548,6 +559,26 @@ impl App {
         if self.focus == Focus::Omni {
             self.sync_preview();
         }
+        // Poll daemon status every ~10s so the connection indicator heals
+        // itself (the launch-time fetch can race the daemon's own phone
+        // connect) and pending-approval counts stay honest.
+        if !self.daemon_lost && self.ticks % 40 == 0 {
+            self.fetch_status();
+        }
+    }
+
+    /// Swap in a fresh daemon connection after a reconnect and re-sync
+    /// everything visible.
+    pub fn adopt_rpc(&mut self, rpc: RpcClient) {
+        self.rpc = rpc;
+        self.daemon_lost = false;
+        self.reconnecting = false;
+        self.preview_cache.clear();
+        self.fetch_chats();
+        self.fetch_status();
+        self.fetch_approvals();
+        self.request_refresh();
+        self.flash("reconnected ✓");
     }
 
     pub fn handle_app_event(&mut self, ev: AppEvent) {
@@ -640,6 +671,10 @@ impl App {
             }
             AppEvent::Flash(msg) => self.flash(msg),
             AppEvent::Server(ev) => self.handle_server_event(ev),
+            AppEvent::DaemonLost => {
+                self.daemon_lost = true;
+                self.status.connected = false;
+            }
         }
     }
 
@@ -728,6 +763,9 @@ impl App {
                     "phone_not_responding" => {
                         self.status.connected = false;
                         self.flash("phone not responding");
+                    }
+                    "listen_temporary_error" => {
+                        self.status.connected = false;
                     }
                     "logged_out" => {
                         self.status.connected = false;
@@ -991,7 +1029,8 @@ impl App {
             KeyCode::Char('r') => {
                 self.fetch_chats();
                 self.fetch_status();
-                self.flash("refreshed");
+                self.request_refresh();
+                self.flash("refreshing…");
             }
             _ => {}
         }

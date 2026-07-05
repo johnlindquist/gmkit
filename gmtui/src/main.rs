@@ -4,21 +4,24 @@ mod model;
 mod rpc;
 mod ui;
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
+use std::time::Duration;
 
 use clap::Parser;
 use color_eyre::eyre::{eyre, Result};
+use tokio::sync::mpsc;
 
 use crate::app::App;
 use crate::event::Event;
+use crate::model::ServerEvent;
 use crate::rpc::RpcClient;
 
 /// Terminal UI for gmcli — browse, search, and approve Google Messages.
 ///
 /// If no daemon is running, one is started automatically (`gmcli serve
-/// --auto`: approval-gated sends, exits when idle). Run `gmcli serve`
-/// yourself for an always-on daemon.
-#[derive(Parser, Debug)]
+/// --auto --notify`: approval-gated sends, desktop notifications, exits
+/// when idle). Run `gmcli serve` yourself for an always-on daemon.
+#[derive(Parser, Debug, Clone)]
 #[command(version, about)]
 struct Args {
     /// gmcli store directory (default: $XDG_STATE_HOME/gmcli or
@@ -44,6 +47,16 @@ struct Args {
     no_autostart: bool,
 }
 
+/// Everything a (re)connect attempt needs; cheap to clone into tasks.
+#[derive(Clone)]
+struct ConnectCfg {
+    socket: PathBuf,
+    store: Option<PathBuf>,
+    gmcli: String,
+    offline: bool,
+    no_autostart: bool,
+}
+
 fn resolve_socket(args: &Args) -> Result<PathBuf> {
     if let Some(sock) = &args.socket {
         return Ok(sock.clone());
@@ -65,26 +78,31 @@ fn resolve_socket(args: &Args) -> Result<PathBuf> {
         .join("gmcli.sock"))
 }
 
-/// Spawn `gmcli serve --auto` detached and wait for the socket to come up.
-async fn autostart_daemon(args: &Args, socket: &std::path::Path) -> Result<()> {
+/// Spawn `gmcli serve --auto --notify` detached and wait for the socket to
+/// come up. `quiet` suppresses stderr chatter (reconnects happen while the
+/// alternate screen is active).
+async fn autostart_daemon(cfg: &ConnectCfg, quiet: bool) -> Result<()> {
     use std::os::unix::process::CommandExt;
 
-    eprintln!(
-        "gmtui: no daemon on {}; starting `{} serve --auto`...",
-        socket.display(),
-        args.gmcli
-    );
-    let mut cmd = std::process::Command::new(&args.gmcli);
-    if let Some(store) = &args.store {
+    if !quiet {
+        eprintln!(
+            "gmtui: no daemon on {}; starting `{} serve --auto`...",
+            cfg.socket.display(),
+            cfg.gmcli
+        );
+    }
+    let mut cmd = std::process::Command::new(&cfg.gmcli);
+    if let Some(store) = &cfg.store {
         cmd.arg("--store").arg(store);
     }
     cmd.args(["--log-level", "warn", "serve", "--auto", "--notify"]);
-    if args.offline {
+    if cfg.offline {
         cmd.arg("--offline");
     }
     // Log where the Go-side autostart logs too: <store dir>/daemon.log
     // (the daemon's store dir is the socket's parent for default layouts).
-    let log = socket
+    let log = cfg
+        .socket
         .parent()
         .map(|dir| dir.join("daemon.log"))
         .and_then(|p| {
@@ -111,44 +129,80 @@ async fn autostart_daemon(args: &Args, socket: &std::path::Path) -> Result<()> {
     cmd.spawn().map_err(|e| {
         eyre!(
             "could not run `{}` (is gmcli installed and on PATH?): {e}",
-            args.gmcli
+            cfg.gmcli
         )
     })?;
 
-    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
+    let deadline = std::time::Instant::now() + Duration::from_secs(30);
     while std::time::Instant::now() < deadline {
-        if tokio::net::UnixStream::connect(socket).await.is_ok() {
+        if tokio::net::UnixStream::connect(&cfg.socket).await.is_ok() {
             return Ok(());
         }
-        tokio::time::sleep(std::time::Duration::from_millis(150)).await;
+        tokio::time::sleep(Duration::from_millis(150)).await;
     }
     Err(eyre!(
         "daemon did not come up within 30s; check {}/daemon.log (unpaired? run `gmcli auth`)",
-        socket
+        cfg.socket
             .parent()
-            .map(|p| p.display().to_string())
+            .map(|p| Path::display(p).to_string())
             .unwrap_or_default()
     ))
+}
+
+/// Dial the daemon (starting one if allowed and needed) and subscribe.
+async fn connect_daemon(
+    cfg: &ConnectCfg,
+    quiet: bool,
+) -> Result<(RpcClient, mpsc::UnboundedReceiver<ServerEvent>)> {
+    if tokio::net::UnixStream::connect(&cfg.socket).await.is_err() && !cfg.no_autostart {
+        autostart_daemon(cfg, quiet).await?;
+    }
+    let (client, server_events) = RpcClient::connect(&cfg.socket)
+        .await
+        .map_err(|e| eyre!("{e}"))?;
+    client.subscribe().await.map_err(|e| eyre!("{e}"))?;
+    Ok((client, server_events))
+}
+
+/// Background loop that keeps trying to restore the daemon connection.
+/// Attaches the new event stream and hands the client to the main loop.
+fn spawn_reconnect(cfg: ConnectCfg, tx: mpsc::UnboundedSender<Event>) {
+    tokio::spawn(async move {
+        let mut delay = Duration::from_secs(1);
+        loop {
+            match connect_daemon(&cfg, true).await {
+                Ok((client, server_events)) => {
+                    event::attach_server_events(tx.clone(), server_events);
+                    let _ = tx.send(Event::Reconnected(client));
+                    return;
+                }
+                Err(_) => {
+                    tokio::time::sleep(delay).await;
+                    delay = (delay * 2).min(Duration::from_secs(15));
+                }
+            }
+        }
+    });
 }
 
 #[tokio::main]
 async fn main() -> Result<()> {
     color_eyre::install()?;
     let args = Args::parse();
-    let socket = resolve_socket(&args)?;
+    let cfg = ConnectCfg {
+        socket: resolve_socket(&args)?,
+        store: args.store.clone(),
+        gmcli: args.gmcli.clone(),
+        offline: args.offline,
+        no_autostart: args.no_autostart,
+    };
 
-    // Connect before touching the terminal so connection errors print
-    // normally instead of corrupting the screen. Auto-start the daemon if
-    // nothing is listening.
-    if tokio::net::UnixStream::connect(&socket).await.is_err() && !args.no_autostart {
-        autostart_daemon(&args, &socket).await?;
-    }
-    let (client, server_events) = RpcClient::connect(&socket)
-        .await
-        .map_err(|e| eyre!("{e}"))?;
-    client.subscribe().await.map_err(|e| eyre!("{e}"))?;
+    // Connect before touching the terminal so first-run connection errors
+    // print normally instead of corrupting the screen.
+    let (client, server_events) = connect_daemon(&cfg, false).await?;
 
-    let (app_tx, mut events) = event::start(server_events);
+    let (event_tx, app_tx, mut events) = event::start();
+    event::attach_server_events(event_tx.clone(), server_events);
     let mut app = App::new(client, app_tx);
     app.fetch_chats();
     app.fetch_status();
@@ -158,7 +212,7 @@ async fn main() -> Result<()> {
     app.request_refresh();
 
     let mut terminal = ratatui::init();
-    let result = run(&mut terminal, &mut app, &mut events).await;
+    let result = run(&mut terminal, &mut app, &mut events, &cfg, &event_tx).await;
     ratatui::restore();
     result
 }
@@ -166,7 +220,9 @@ async fn main() -> Result<()> {
 async fn run(
     terminal: &mut ratatui::DefaultTerminal,
     app: &mut App,
-    events: &mut tokio::sync::mpsc::UnboundedReceiver<Event>,
+    events: &mut mpsc::UnboundedReceiver<Event>,
+    cfg: &ConnectCfg,
+    event_tx: &mpsc::UnboundedSender<Event>,
 ) -> Result<()> {
     while !app.should_quit {
         if app.take_bell() {
@@ -181,7 +237,16 @@ async fn run(
         match events.recv().await {
             Some(Event::Tick) => app.on_tick(),
             Some(Event::Term(ev)) => app.handle_term_event(ev),
-            Some(Event::App(ev)) => app.handle_app_event(ev),
+            Some(Event::App(ev)) => {
+                app.handle_app_event(ev);
+                // The daemon vanished (idle-exit, crash, upgrade): bring it
+                // back without the user doing anything.
+                if app.daemon_lost && !app.reconnecting {
+                    app.reconnecting = true;
+                    spawn_reconnect(cfg.clone(), event_tx.clone());
+                }
+            }
+            Some(Event::Reconnected(client)) => app.adopt_rpc(client),
             None => break,
         }
     }

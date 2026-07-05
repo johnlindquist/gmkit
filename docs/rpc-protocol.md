@@ -46,7 +46,7 @@ Read methods (always available):
 | Method             | Params                                                              | Result |
 | ------------------ | ------------------------------------------------------------------- | ------ |
 | `ping`             | —                                                                   | `{pong, version, schema_version}` |
-| `status`           | —                                                                   | `{connected, send_mode, pending_approvals, conversations, messages, last_event_ms, last_connect_ms, updated_at_ms}` |
+| `status`           | —                                                                   | `{connected, offline, send_mode, pending_approvals, conversations, messages, last_event_ms, last_connect_ms, updated_at_ms}` — `offline` = daemon deliberately has no phone connection |
 | `subscribe`        | —                                                                   | `{subscribed: true}`; events start flowing on this connection |
 | `chats.list`       | `{limit?, unread_only?, pinned?}`                                   | array of conversations |
 | `chats.find`       | `{query, limit?}` — person/group/number fragment                    | array of conversations, matched on name, alias, participants, and contacts |
