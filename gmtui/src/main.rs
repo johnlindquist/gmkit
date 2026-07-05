@@ -78,7 +78,7 @@ async fn autostart_daemon(args: &Args, socket: &std::path::Path) -> Result<()> {
     if let Some(store) = &args.store {
         cmd.arg("--store").arg(store);
     }
-    cmd.args(["--log-level", "warn", "serve", "--auto"]);
+    cmd.args(["--log-level", "warn", "serve", "--auto", "--notify"]);
     if args.offline {
         cmd.arg("--offline");
     }
@@ -153,6 +153,9 @@ async fn main() -> Result<()> {
     app.fetch_chats();
     app.fetch_status();
     app.fetch_approvals();
+    // Catch up on anything the archive missed while no daemon was running;
+    // the daemon broadcasts "refreshed" and we refetch.
+    app.request_refresh();
 
     let mut terminal = ratatui::init();
     let result = run(&mut terminal, &mut app, &mut events).await;
@@ -166,6 +169,14 @@ async fn run(
     events: &mut tokio::sync::mpsc::UnboundedReceiver<Event>,
 ) -> Result<()> {
     while !app.should_quit {
+        if app.take_bell() {
+            // Terminal bell for incoming messages; terminals surface this
+            // as a sound and/or a dock/tab attention marker.
+            use std::io::Write;
+            let mut out = std::io::stdout();
+            let _ = out.write_all(b"\x07");
+            let _ = out.flush();
+        }
         terminal.draw(|frame| ui::render(frame, app))?;
         match events.recv().await {
             Some(Event::Tick) => app.on_tick(),

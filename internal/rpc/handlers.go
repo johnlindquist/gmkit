@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"go.mau.fi/mautrix-gmessages/pkg/libgm/gmproto"
 
 	"github.com/johnlindquist/gmkit/internal/history"
 	"github.com/johnlindquist/gmkit/internal/store"
@@ -39,6 +40,8 @@ func (s *Server) dispatch(ctx context.Context, c *serverConn, method string, par
 		return s.handleContactsSearch(ctx, params)
 	case "contacts.show":
 		return s.handleContactsShow(ctx, params)
+	case "sync.refresh":
+		return s.handleSyncRefresh(ctx)
 	case "history.backfill":
 		return s.handleHistoryBackfill(ctx, params)
 	case "history.lookup":
@@ -176,7 +179,7 @@ func (s *Server) handleChatsShow(ctx context.Context, params json.RawMessage) (a
 	if err != nil {
 		return nil, internalErr(err)
 	}
-	return map[string]any{"conversation": conv, "messages": msgs}, nil
+	return map[string]any{"conversation": conv, "messages": s.deps.Store.EnrichMessages(ctx, msgs)}, nil
 }
 
 type messagesListParams struct {
@@ -209,7 +212,7 @@ func (s *Server) handleMessagesList(ctx context.Context, params json.RawMessage)
 	if err != nil {
 		return nil, internalErr(err)
 	}
-	return msgs, nil
+	return s.deps.Store.EnrichMessages(ctx, msgs), nil
 }
 
 type messagesSearchParams struct {
@@ -292,7 +295,7 @@ func (s *Server) handleMessagesContext(ctx context.Context, params json.RawMessa
 	if err != nil {
 		return nil, internalErr(err)
 	}
-	return msgs, nil
+	return s.deps.Store.EnrichMessages(ctx, msgs), nil
 }
 
 type contactsSearchParams struct {
@@ -335,6 +338,65 @@ func (s *Server) handleContactsShow(ctx context.Context, params json.RawMessage)
 		return nil, internalErr(err)
 	}
 	return contact, nil
+}
+
+// handleSyncRefresh pulls a light snapshot from the phone: the most recent
+// inbox conversations plus their latest messages. Clients call it on
+// connect so the archive catches up on anything the long-poll missed while
+// no daemon (or an idle one) was running. Rate-limited; runs in the
+// background and announces completion with a sync.status "refreshed" event.
+func (s *Server) handleSyncRefresh(ctx context.Context) (any, *Error) {
+	if s.deps.Client == nil || s.deps.Pump == nil {
+		return nil, &Error{Code: CodeUnavailable, Message: "offline daemon: no phone connection to refresh from"}
+	}
+	s.refreshMu.Lock()
+	if time.Since(s.lastRefresh) < 30*time.Second {
+		s.refreshMu.Unlock()
+		return map[string]any{"started": false, "reason": "refreshed recently"}, nil
+	}
+	s.lastRefresh = time.Now()
+	s.refreshMu.Unlock()
+
+	go s.runRefresh()
+	return map[string]any{"started": true}, nil
+}
+
+// refreshConversations bounds one sync.refresh pass: how many recent inbox
+// conversations to re-pull, and for how many of those to fetch messages.
+const (
+	refreshConversations = 50
+	refreshMessageConvs  = 15
+	refreshMessagesEach  = 20
+)
+
+func (s *Server) runRefresh() {
+	s.liveMu.Lock()
+	defer s.liveMu.Unlock()
+	ctx := context.Background()
+
+	resp, err := s.deps.Client.Underlying().ListConversations(refreshConversations, gmproto.ListConversationsRequest_INBOX)
+	if err != nil {
+		s.deps.Logger.Warn().Err(err).Msg("sync.refresh: list conversations failed")
+		s.Broadcast(EventSyncStatus, map[string]any{"state": "refresh_failed"})
+		return
+	}
+	fetched := 0
+	for _, conv := range resp.GetConversations() {
+		if conv == nil || conv.GetConversationID() == "" {
+			continue
+		}
+		s.deps.Pump.Handle(conv)
+		if fetched < refreshMessageConvs {
+			if history, err := s.deps.Client.Underlying().FetchMessages(conv.GetConversationID(), refreshMessagesEach, nil); err == nil {
+				s.deps.Pump.ImportMessages(ctx, history.GetMessages())
+			}
+			fetched++
+		}
+	}
+	_ = s.deps.Store.MarkSync(ctx, time.Time{}, time.Now())
+	// Direct pump writes bypass the gm-event broadcaster, so tell clients
+	// to refetch wholesale.
+	s.Broadcast(EventSyncStatus, map[string]any{"state": "refreshed"})
 }
 
 type historyBackfillParams struct {

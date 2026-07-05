@@ -44,9 +44,24 @@ Flags: `--store <dir>` / `--socket <path>` to point at a non-default store,
 gmtui launches straight into search: just start typing. People and chats
 filter instantly (names, group titles, phone numbers — including contacts
 resolved server-side); full-text message hits stream in as you type,
-debounced against the daemon's FTS index. `Enter` opens a chat, or opens a
-message hit in its surrounding context. `Esc` drops into the classic
-two-pane browse layout; `/` gets you back to search from anywhere.
+debounced against the daemon's FTS index. Each hit shows who said it,
+where, when (relative + absolute), and a readable excerpt with the match
+highlighted — and on wide terminals a live **thread preview pane** shows
+the selected hit in its surrounding conversation, anchor marked. `Enter`
+opens a chat, or opens a message hit in its full context. `Esc` drops into
+the classic two-pane browse layout; `/` gets you back to search from
+anywhere.
+
+## Fresh data & notifications
+
+On connect, gmtui asks the daemon to pull the latest messages from your
+phone (`sync.refresh`) and refetches when the import lands — so the launch
+screen reflects texts from a minute ago, not from the last time a daemon
+ran. Incoming messages ring the terminal bell and flash in the status bar;
+daemons auto-started by gmtui also run with `--notify`, which posts desktop
+notifications (macOS/Linux) for incoming texts while the daemon is alive.
+For always-on notifications, run `gmcli --read-only=false serve --notify`
+under a supervisor.
 
 ## Keys
 

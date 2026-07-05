@@ -211,3 +211,20 @@ func TestSearchMessagesRichORFallbackTier(t *testing.T) {
 		t.Fatalf("or-tier should surface m3: %+v", hits)
 	}
 }
+
+func TestSearchMessagesRichORTierOnValidQueryZeroHits(t *testing.T) {
+	st := seedSearchStore(t)
+	ctx := context.Background()
+	// Valid FTS5 (implicit AND) but no single message has both terms; the
+	// OR tier should surface per-term matches.
+	hits, err := st.SearchMessagesRich(ctx, SearchOpts{Query: "camping pizza"})
+	if err != nil || len(hits) == 0 {
+		t.Fatalf("or tier on valid query: %+v err=%v", hits, err)
+	}
+	// Explicit FTS syntax stays exact: a quoted phrase with no hits must
+	// NOT degrade to OR.
+	hits, err = st.SearchMessagesRich(ctx, SearchOpts{Query: `"camping pizza"`})
+	if err != nil || len(hits) != 0 {
+		t.Fatalf("phrase should stay exact: %+v err=%v", hits, err)
+	}
+}

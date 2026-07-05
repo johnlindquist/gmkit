@@ -62,6 +62,9 @@ type Server struct {
 	// backfills). libgm tolerates some concurrency, but interleaving
 	// FetchMessages pagination with sends has no upside.
 	liveMu sync.Mutex
+
+	refreshMu   sync.Mutex
+	lastRefresh time.Time
 }
 
 // NewServer builds a Server around deps.

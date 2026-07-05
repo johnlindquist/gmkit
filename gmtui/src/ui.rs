@@ -7,7 +7,7 @@ use ratatui::widgets::{Block, Clear, List, ListItem, Paragraph, Wrap};
 use ratatui::Frame;
 
 use crate::app::{App, Focus};
-use crate::model::{format_ts, now_ms, Conversation, Message};
+use crate::model::{format_ts, iso_short, now_ms, Conversation, Message};
 
 const ACCENT: Color = Color::Cyan;
 const DIM: Color = Color::DarkGray;
@@ -47,7 +47,7 @@ pub fn render(frame: &mut Frame, app: &mut App) {
 // ---------------------------------------------------------------- omni
 
 fn render_omni(frame: &mut Frame, app: &mut App, area: Rect) {
-    let [input_area, results_area] =
+    let [input_area, body_area] =
         Layout::vertical([Constraint::Length(3), Constraint::Min(1)]).areas(area);
 
     // Query box.
@@ -58,18 +58,32 @@ fn render_omni(frame: &mut Frame, app: &mut App, area: Rect) {
     };
     let width = input_area.width.saturating_sub(3) as usize;
     let scroll = app.omni.input.visual_scroll(width);
-    let query = Paragraph::new(app.omni.input.value())
+    let query_box = Paragraph::new(app.omni.input.value())
         .scroll((0, scroll as u16))
         .block(pane_block(title, true));
-    frame.render_widget(query, input_area);
+    frame.render_widget(query_box, input_area);
     let x = (app.omni.input.visual_cursor().saturating_sub(scroll)) as u16;
     frame.set_cursor_position((input_area.x + 1 + x, input_area.y + 1));
+
+    // Wide terminals get a live thread-preview pane for the selection.
+    let show_preview = body_area.width >= 100 && app.omni.total() > 0;
+    let (results_area, preview_area) = if show_preview {
+        let [l, r] = Layout::horizontal([Constraint::Percentage(55), Constraint::Percentage(45)])
+            .areas(body_area);
+        (l, Some(r))
+    } else {
+        (body_area, None)
+    };
+
+    let query = app.omni.input.value().trim().to_string();
+    let terms = query_terms(&query);
+    let excerpt_width = results_area.width.saturating_sub(6).max(20) as usize;
 
     // Unified results: chats first, then message hits, with section headers
     // interleaved as unselectable rows.
     let now = now_ms();
     let nchats = app.omni.chat_results.len();
-    let query_empty = app.omni.input.value().trim().is_empty();
+    let query_empty = query.is_empty();
     let mut items: Vec<ListItem> = Vec::new();
     let mut selected_item_idx: Option<usize> = None;
 
@@ -109,35 +123,43 @@ fn render_omni(frame: &mut Frame, app: &mut App, area: Rect) {
             } else {
                 h.conversation_name.clone()
             };
-            let sender = if h.sender_name.is_empty() {
-                String::new()
-            } else {
-                format!(" · {}", h.sender_name)
-            };
-            let snippet = if h.snippet.is_empty() {
-                h.body.clone()
-            } else {
-                h.snippet.clone()
-            };
             let base = if selected {
                 Style::default().bg(SELECT_BG)
             } else {
                 Style::default()
             };
-            items.push(ListItem::new(Text::from(vec![
-                Line::from(vec![
-                    Span::styled(
-                        format!(" {conv_name}"),
-                        base.fg(ACCENT).add_modifier(Modifier::BOLD),
-                    ),
-                    Span::styled(sender, base.fg(DIM)),
-                    Span::styled(
-                        format!("  {}", format_ts(h.timestamp_ms, now)),
-                        base.fg(DIM),
-                    ),
-                ]),
-                Line::styled(format!("   {}", snippet.replace('\n', " ")), base),
-            ])));
+            let marker = if selected { "▍" } else { " " };
+            let mut head = vec![
+                Span::styled(marker.to_string(), base.fg(ACCENT)),
+                Span::styled(conv_name, base.fg(ACCENT).add_modifier(Modifier::BOLD)),
+            ];
+            if !h.sender_name.is_empty() {
+                head.push(Span::styled(
+                    format!(" · from {}", h.sender_name),
+                    base.fg(OTHER),
+                ));
+            }
+            head.push(Span::styled(
+                format!("  {}", format_ts(h.timestamp_ms, now)),
+                base.fg(DIM),
+            ));
+            if !h.timestamp_iso.is_empty() {
+                head.push(Span::styled(
+                    format!(" · {}", iso_short(&h.timestamp_iso)),
+                    base.fg(DIM),
+                ));
+            }
+            let mut lines = vec![Line::from(head)];
+            // Excerpt from the full body around the match, with the match
+            // highlighted — the FTS snippet is too tight to be readable.
+            let source = if h.body.is_empty() {
+                &h.snippet
+            } else {
+                &h.body
+            };
+            lines.extend(excerpt_lines(source, &terms, excerpt_width, 2, base));
+            lines.push(Line::raw(""));
+            items.push(ListItem::new(Text::from(lines)));
         }
     }
     if items.is_empty() {
@@ -159,6 +181,231 @@ fn render_omni(frame: &mut Frame, app: &mut App, area: Rect) {
     app.omni.list_state.select(selected_item_idx);
     let list = List::new(items).block(pane_block(&footer, false));
     frame.render_stateful_widget(list, results_area, &mut app.omni.list_state);
+
+    if let Some(preview_area) = preview_area {
+        render_omni_preview(frame, app, preview_area, &terms);
+    }
+}
+
+/// The thread-preview pane: the selected hit in its surrounding
+/// conversation, anchor highlighted.
+fn render_omni_preview(frame: &mut Frame, app: &App, area: Rect, terms: &[Vec<char>]) {
+    let Some(preview) = app
+        .omni
+        .preview
+        .as_ref()
+        .filter(|p| Some(&p.key) == app.omni.preview_key.as_ref())
+    else {
+        let p = Paragraph::new("\n  loading thread…").block(pane_block("thread", false));
+        frame.render_widget(p, area);
+        return;
+    };
+
+    let title = if preview.title.is_empty() {
+        "thread".to_string()
+    } else {
+        format!("thread: {}", preview.title)
+    };
+    let now = now_ms();
+    let wrap_width = area.width.saturating_sub(6).max(20) as usize;
+    let mut lines: Vec<Line> = Vec::new();
+    for m in &preview.messages {
+        let is_anchor = preview.anchor.as_deref() == Some(m.message_id.as_str());
+        let base = if is_anchor {
+            Style::default().bg(SELECT_BG)
+        } else {
+            Style::default()
+        };
+        let who = if m.is_from_me {
+            "me".to_string()
+        } else if !m.sender_name.is_empty() {
+            m.sender_name.clone()
+        } else {
+            "them".to_string()
+        };
+        let color = if m.is_from_me { ME } else { OTHER };
+        let mut head = vec![Span::styled(
+            who,
+            base.fg(color).add_modifier(Modifier::BOLD),
+        )];
+        let when = if m.timestamp_iso.is_empty() {
+            format_ts(m.timestamp_ms, now)
+        } else {
+            iso_short(&m.timestamp_iso)
+        };
+        head.push(Span::styled(format!("  {when}"), base.fg(DIM)));
+        if is_anchor {
+            head.push(Span::styled(
+                "  ◀ match",
+                base.fg(WARN).add_modifier(Modifier::BOLD),
+            ));
+        }
+        lines.push(Line::from(head));
+        let body = m.body.clone().unwrap_or_else(|| {
+            m.mime_type
+                .as_deref()
+                .map(|t| format!("[{t}]"))
+                .unwrap_or_else(|| "[media]".to_string())
+        });
+        for raw_line in body.lines() {
+            for chunk in wrap_text(raw_line, wrap_width) {
+                if is_anchor {
+                    // Highlight the search terms inside the matched message.
+                    let mut spans = vec![Span::styled("  ".to_string(), base)];
+                    spans.extend(highlight_spans(&chunk, terms, base));
+                    lines.push(Line::from(spans));
+                } else {
+                    lines.push(Line::styled(format!("  {chunk}"), base));
+                }
+            }
+        }
+        lines.push(Line::raw(""));
+    }
+
+    // Keep the anchor visible: scroll so it sits ~1/3 from the top.
+    let anchor_line = preview
+        .anchor
+        .as_ref()
+        .and_then(|a| {
+            let mut line_no = 0usize;
+            for m in &preview.messages {
+                if Some(m.message_id.as_str()) == Some(a.as_str())
+                    && preview.anchor.as_deref() == Some(m.message_id.as_str())
+                {
+                    return Some(line_no);
+                }
+                let body_lines: usize = m
+                    .body
+                    .as_deref()
+                    .unwrap_or("[media]")
+                    .lines()
+                    .map(|l| wrap_text(l, wrap_width).len())
+                    .sum();
+                line_no += 1 + body_lines.max(1) + 1;
+            }
+            None
+        })
+        .unwrap_or(0);
+    let visible = area.height.saturating_sub(2) as usize;
+    let scroll = anchor_line.saturating_sub(visible / 3);
+
+    let p = Paragraph::new(Text::from(lines))
+        .scroll((scroll as u16, 0))
+        .block(pane_block(&title, false));
+    frame.render_widget(p, area);
+}
+
+/// Lowercased, punctuation-trimmed terms (as char vectors) for highlighting.
+fn query_terms(query: &str) -> Vec<Vec<char>> {
+    query
+        .split_whitespace()
+        .map(|w| {
+            w.trim_matches(|c: char| !c.is_alphanumeric())
+                .to_lowercase()
+                .chars()
+                .collect::<Vec<char>>()
+        })
+        .filter(|w: &Vec<char>| w.len() >= 2)
+        .collect()
+}
+
+/// Case-insensitive per-char lowercase, index-aligned with the input.
+fn lc_chars(chars: &[char]) -> Vec<char> {
+    chars
+        .iter()
+        .map(|c| c.to_lowercase().next().unwrap_or(*c))
+        .collect()
+}
+
+fn match_len_at(lc: &[char], i: usize, terms: &[Vec<char>]) -> Option<usize> {
+    for t in terms {
+        if !t.is_empty() && i + t.len() <= lc.len() && &lc[i..i + t.len()] == t.as_slice() {
+            return Some(t.len());
+        }
+    }
+    None
+}
+
+/// Style a single already-wrapped line, highlighting term occurrences.
+fn highlight_spans(text: &str, terms: &[Vec<char>], base: Style) -> Vec<Span<'static>> {
+    let chars: Vec<char> = text.chars().collect();
+    let lc = lc_chars(&chars);
+    let mut spans = Vec::new();
+    let mut run = String::new();
+    let mut run_hl = false;
+    let mut i = 0usize;
+    let flush = |spans: &mut Vec<Span<'static>>, run: &mut String, hl: bool| {
+        if run.is_empty() {
+            return;
+        }
+        let style = if hl {
+            base.fg(WARN).add_modifier(Modifier::BOLD)
+        } else {
+            base
+        };
+        spans.push(Span::styled(std::mem::take(run), style));
+    };
+    while i < chars.len() {
+        let hl_len = match_len_at(&lc, i, terms);
+        let hl = hl_len.is_some();
+        if hl != run_hl {
+            flush(&mut spans, &mut run, run_hl);
+            run_hl = hl;
+        }
+        let take = hl_len.unwrap_or(1);
+        for c in &chars[i..(i + take).min(chars.len())] {
+            run.push(*c);
+        }
+        i += take;
+    }
+    flush(&mut spans, &mut run, run_hl);
+    spans
+}
+
+/// Build up to `max_lines` display lines from `body`, windowed around the
+/// earliest term match, with matches highlighted.
+fn excerpt_lines(
+    body: &str,
+    terms: &[Vec<char>],
+    width: usize,
+    max_lines: usize,
+    base: Style,
+) -> Vec<Line<'static>> {
+    let flat = body.replace('\n', " ");
+    let chars: Vec<char> = flat.chars().collect();
+    if chars.is_empty() {
+        return Vec::new();
+    }
+    let lc = lc_chars(&chars);
+    let first = (0..lc.len()).find(|&i| match_len_at(&lc, i, terms).is_some());
+    let budget = width.saturating_mul(max_lines).max(24);
+    let mut start = first.map(|f| f.saturating_sub(width / 3)).unwrap_or(0);
+    // Snap the window start back to a word boundary (bounded walk).
+    let limit = start.saturating_sub(12);
+    while start > limit && start > 0 && chars[start - 1] != ' ' {
+        start -= 1;
+    }
+    let end = (start + budget).min(chars.len());
+
+    // Wrap the window into lines at word boundaries.
+    let window: String = chars[start..end].iter().collect();
+    let mut wrapped = wrap_text(window.trim(), width);
+    wrapped.truncate(max_lines);
+
+    let mut lines = Vec::new();
+    let last_idx = wrapped.len().saturating_sub(1);
+    for (i, seg) in wrapped.into_iter().enumerate() {
+        let mut spans = vec![Span::styled("   ".to_string(), base)];
+        if i == 0 && start > 0 {
+            spans.push(Span::styled("…".to_string(), base.fg(DIM)));
+        }
+        spans.extend(highlight_spans(&seg, terms, base));
+        if i == last_idx && end < chars.len() {
+            spans.push(Span::styled("…".to_string(), base.fg(DIM)));
+        }
+        lines.push(Line::from(spans));
+    }
+    lines
 }
 
 fn omni_chat_row(c: &Conversation, now: i64, selected: bool) -> ListItem<'static> {

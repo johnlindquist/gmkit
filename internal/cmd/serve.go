@@ -6,9 +6,12 @@ import (
 	"os"
 	"time"
 
+	"github.com/rs/zerolog"
 	"github.com/spf13/cobra"
+	"go.mau.fi/mautrix-gmessages/pkg/libgm"
 
 	"github.com/johnlindquist/gmkit/internal/gm"
+	"github.com/johnlindquist/gmkit/internal/notify"
 	"github.com/johnlindquist/gmkit/internal/rpc"
 	"github.com/johnlindquist/gmkit/internal/store"
 	gmsync "github.com/johnlindquist/gmkit/internal/sync"
@@ -20,6 +23,7 @@ func serveCmd() *cobra.Command {
 	var noImport bool
 	var offline bool
 	var auto bool
+	var notifyFlag bool
 	var idleExit time.Duration
 	c := &cobra.Command{
 		Use:   "serve",
@@ -96,6 +100,9 @@ func serveCmd() *cobra.Command {
 				// broadcaster tells subscribers about it.
 				client.Subscribe(pump.Handle)
 				client.Subscribe(server.HandleGMEvent)
+				if notifyFlag {
+					client.Subscribe(makeDesktopNotifier(st, logger))
+				}
 			}
 
 			sock := socketPath
@@ -123,6 +130,10 @@ func serveCmd() *cobra.Command {
 
 				if !noImport {
 					runInitialImport(ctx, client, pump, logger)
+					// The import writes through the pump directly, which
+					// bypasses the event broadcaster: tell clients that
+					// connected early to refetch.
+					server.Broadcast(rpc.EventSyncStatus, map[string]any{"state": "refreshed"})
 				}
 			}
 
@@ -160,6 +171,47 @@ func serveCmd() *cobra.Command {
 	c.Flags().BoolVar(&noImport, "no-import", false, "skip the initial contact/conversation import on startup")
 	c.Flags().BoolVar(&offline, "offline", false, "serve the local archive without connecting to the phone")
 	c.Flags().BoolVar(&auto, "auto", false, "on-demand mode used by gmtui/mcp: approval-gated sends, exits when idle")
+	c.Flags().BoolVar(&notifyFlag, "notify", false, "send desktop notifications for incoming messages")
 	c.Flags().DurationVar(&idleExit, "idle-exit", 0, "exit after this long with no connected clients (0 = never)")
 	return c
+}
+
+// makeDesktopNotifier returns an event handler that shows a desktop
+// notification for each live incoming message (not history imports, not the
+// user's own sends). Name resolution is best-effort against the store.
+func makeDesktopNotifier(st *store.Store, logger zerolog.Logger) func(any) {
+	return func(evt any) {
+		w, ok := evt.(*libgm.WrappedMessage)
+		if !ok || w.IsOld {
+			return
+		}
+		row, ok := gmsync.MessageRow(w, "gm")
+		if !ok || row.IsFromMe {
+			return
+		}
+		go func() {
+			ctx := context.Background()
+			title := row.SenderID
+			if contact, err := st.GetContact(ctx, row.SenderID); err == nil {
+				if contact.DisplayName != "" {
+					title = contact.DisplayName
+				} else if contact.E164 != "" {
+					title = contact.E164
+				}
+			}
+			if conv, err := st.GetConversation(ctx, row.ConversationID); err == nil && conv.IsGroup {
+				title = title + " — " + conv.DisplayName()
+			}
+			body := "[media]"
+			if row.Body != nil && *row.Body != "" {
+				body = *row.Body
+				if len(body) > 140 {
+					body = body[:140] + "…"
+				}
+			}
+			if err := notify.Send(title, body); err != nil {
+				logger.Debug().Err(err).Msg("desktop notification failed")
+			}
+		}()
+	}
 }

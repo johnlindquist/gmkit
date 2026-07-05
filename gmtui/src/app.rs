@@ -31,6 +31,7 @@ pub enum AppEvent {
         chats: Vec<Conversation>,
         msgs: Vec<SearchHit>,
     },
+    OmniPreview(Preview),
     Context {
         anchor: String,
         conversation_id: String,
@@ -51,6 +52,25 @@ pub enum Focus {
     Compose,
 }
 
+/// Identifies what the omni preview pane should show for a selection.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub enum PreviewKey {
+    /// A message hit: preview its surrounding thread context.
+    Msg(String),
+    /// A chat hit: preview its most recent messages.
+    Chat(String),
+}
+
+/// A loaded thread preview for the selected omni result.
+#[derive(Debug, Clone)]
+pub struct Preview {
+    pub key: PreviewKey,
+    pub title: String,
+    /// Highlighted message within the preview (the search hit).
+    pub anchor: Option<String>,
+    pub messages: Vec<Message>,
+}
+
 /// State for the omni search screen.
 #[derive(Default)]
 pub struct OmniState {
@@ -65,6 +85,9 @@ pub struct OmniState {
     /// Index into the unified selectable list: chats first, then messages.
     pub selected: usize,
     pub list_state: ListState,
+    /// What the preview pane currently targets (may still be loading).
+    pub preview_key: Option<PreviewKey>,
+    pub preview: Option<Preview>,
 }
 
 impl OmniState {
@@ -80,9 +103,12 @@ pub struct App {
     rpc: RpcClient,
     tx: UnboundedSender<AppEvent>,
     pub should_quit: bool,
+    /// Ring the terminal bell on the next draw (incoming message).
+    bell: bool,
 
     pub focus: Focus,
     pub omni: OmniState,
+    preview_cache: std::collections::HashMap<PreviewKey, Preview>,
     pub compose_input: Input,
     compose_return: Focus,
     /// Where Esc from the messages pane goes back to.
@@ -110,8 +136,10 @@ impl App {
             rpc,
             tx,
             should_quit: false,
+            bell: false,
             focus: Focus::Omni,
             omni: OmniState::default(),
+            preview_cache: std::collections::HashMap::new(),
             compose_input: Input::default(),
             compose_return: Focus::Omni,
             messages_back: Focus::Omni,
@@ -390,6 +418,121 @@ impl App {
         self.refresh_omni_local();
     }
 
+    /// True once per requested bell; the main loop rings it.
+    pub fn take_bell(&mut self) -> bool {
+        std::mem::take(&mut self.bell)
+    }
+
+    /// Ask the daemon to pull the latest messages from the phone. Cheap and
+    /// rate-limited server-side; errors (offline daemon, older daemon
+    /// without the method) are ignored — reads still work from the archive.
+    pub fn request_refresh(&self) {
+        let rpc = self.rpc.clone();
+        self.spawn(async move {
+            let _ = rpc.call("sync.refresh", json!({})).await;
+            None
+        });
+    }
+
+    // ---- omni preview ----------------------------------------------------
+
+    fn selected_preview_key(&self) -> Option<PreviewKey> {
+        let nchats = self.omni.chat_results.len();
+        if self.omni.total() == 0 {
+            return None;
+        }
+        if self.omni.selected < nchats {
+            self.omni
+                .chat_results
+                .get(self.omni.selected)
+                .map(|c| PreviewKey::Chat(c.conversation_id.clone()))
+        } else {
+            self.omni
+                .msg_results
+                .get(self.omni.selected - nchats)
+                .map(|h| PreviewKey::Msg(h.message_id.clone()))
+        }
+    }
+
+    /// Keep the preview pane in sync with the selection. Runs on the tick
+    /// (~250ms), so holding j/k scrolls freely without a fetch per row.
+    fn sync_preview(&mut self) {
+        let key = self.selected_preview_key();
+        if key == self.omni.preview_key {
+            return;
+        }
+        self.omni.preview_key = key.clone();
+        self.omni.preview = None;
+        let Some(key) = key else { return };
+        if let Some(cached) = self.preview_cache.get(&key) {
+            self.omni.preview = Some(cached.clone());
+            return;
+        }
+        let rpc = self.rpc.clone();
+        match key {
+            PreviewKey::Msg(message_id) => {
+                let nchats = self.omni.chat_results.len();
+                let title = self
+                    .omni
+                    .msg_results
+                    .get(self.omni.selected.saturating_sub(nchats))
+                    .map(|h| {
+                        if h.conversation_name.is_empty() {
+                            h.conversation_id.clone()
+                        } else {
+                            h.conversation_name.clone()
+                        }
+                    })
+                    .unwrap_or_default();
+                self.spawn(async move {
+                    let messages: Vec<Message> = rpc
+                        .call_as(
+                            "messages.context",
+                            json!({"message_id": message_id, "before": 6, "after": 6}),
+                        )
+                        .await
+                        .unwrap_or_default();
+                    Some(AppEvent::OmniPreview(Preview {
+                        key: PreviewKey::Msg(message_id.clone()),
+                        title,
+                        anchor: Some(message_id),
+                        messages,
+                    }))
+                });
+            }
+            PreviewKey::Chat(conversation_id) => {
+                let title = self
+                    .omni
+                    .chat_results
+                    .iter()
+                    .find(|c| c.conversation_id == conversation_id)
+                    .map(|c| c.display_name())
+                    .unwrap_or_default();
+                self.spawn(async move {
+                    #[derive(serde::Deserialize, Default)]
+                    struct Show {
+                        #[serde(default)]
+                        messages: Vec<Message>,
+                    }
+                    let mut show: Show = rpc
+                        .call_as(
+                            "chats.show",
+                            json!({"conversation_id": conversation_id, "limit": 12}),
+                        )
+                        .await
+                        .unwrap_or_default();
+                    show.messages.sort_by_key(|m| m.timestamp_ms);
+                    Some(AppEvent::OmniPreview(Preview {
+                        key: PreviewKey::Chat(conversation_id),
+                        title,
+                        anchor: None,
+                        messages: show.messages,
+                    }))
+                });
+            }
+        }
+    }
+
     // ---- event handling -------------------------------------------------
 
     pub fn on_tick(&mut self) {
@@ -401,6 +544,9 @@ impl App {
         if self.omni.dirty {
             self.omni.dirty = false;
             self.dispatch_omni_search();
+        }
+        if self.focus == Focus::Omni {
+            self.sync_preview();
         }
     }
 
@@ -456,6 +602,16 @@ impl App {
                     self.omni.selected = 0;
                 } else if self.omni.selected >= total {
                     self.omni.selected = total - 1;
+                }
+            }
+            AppEvent::OmniPreview(preview) => {
+                if self.preview_cache.len() > 200 {
+                    self.preview_cache.clear();
+                }
+                self.preview_cache
+                    .insert(preview.key.clone(), preview.clone());
+                if self.omni.preview_key.as_ref() == Some(&preview.key) {
+                    self.omni.preview = Some(preview);
                 }
             }
             AppEvent::Context {
@@ -518,6 +674,7 @@ impl App {
                         None => self.chats.push(conv),
                     }
                     self.sort_chats();
+                    self.refresh_omni_recents();
                 }
             }
             "approval.requested" => {
@@ -557,6 +714,17 @@ impl App {
                     "ready" | "listen_recovered" | "phone_responding" => {
                         self.status.connected = true;
                     }
+                    "refreshed" => {
+                        // The daemon just imported fresh data outside the
+                        // event stream: refetch everything visible.
+                        self.status.connected = true;
+                        self.fetch_chats();
+                        self.fetch_status();
+                        if let Some(chat) = self.current_chat.clone() {
+                            self.open_chat(chat);
+                        }
+                        self.preview_cache.clear();
+                    }
                     "phone_not_responding" => {
                         self.status.connected = false;
                         self.flash("phone not responding");
@@ -573,6 +741,26 @@ impl App {
     }
 
     fn apply_incoming_message(&mut self, msg: Message, is_old: bool) {
+        // Announce live incoming messages: terminal bell + flash, unless
+        // the user is already looking at that conversation.
+        if !is_old && !msg.is_from_me {
+            let viewing = self.focus == Focus::Messages
+                && self.current_chat.as_deref() == Some(msg.conversation_id.as_str());
+            if !viewing {
+                let who = if msg.sender_name.is_empty() {
+                    self.chats
+                        .iter()
+                        .find(|c| c.conversation_id == msg.conversation_id)
+                        .map(|c| c.display_name())
+                        .unwrap_or_else(|| "new message".to_string())
+                } else {
+                    msg.sender_name.clone()
+                };
+                self.flash(format!("✉ {who}"));
+                self.bell = true;
+            }
+        }
+
         // Keep the chat list ordering fresh.
         if let Some(chat) = self
             .chats
@@ -583,6 +771,7 @@ impl App {
                 chat.last_message_time_ms = msg.timestamp_ms;
             }
             self.sort_chats();
+            self.refresh_omni_recents();
         } else if !is_old {
             // Unknown conversation: refresh the list.
             self.fetch_chats();
@@ -609,6 +798,13 @@ impl App {
         }
         if at_bottom && !self.messages.is_empty() {
             self.msg_state.select(Some(self.messages.len() - 1));
+        }
+    }
+
+    /// Update the launch screen's recents when chats change under it.
+    fn refresh_omni_recents(&mut self) {
+        if self.focus == Focus::Omni && self.omni.input.value().trim().is_empty() {
+            self.omni.chat_results = self.local_chat_matches("");
         }
     }
 

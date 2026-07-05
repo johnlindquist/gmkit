@@ -52,6 +52,7 @@ Read methods (always available):
 | `chats.find`       | `{query, limit?}` — person/group/number fragment                    | array of conversations, matched on name, alias, participants, and contacts |
 | `chats.show`       | `{conversation_id, limit?}`                                         | `{conversation, messages}` (messages newest-first) |
 | `messages.list`    | `{conversation_id?, sender_id?, since_ms?, until_ms?, limit?, order?}` | array of messages |
+| `sync.refresh`     | —                                                                   | `{started}`; pulls the latest inbox conversations/messages from the phone in the background (rate-limited, 30s) and then broadcasts `sync.status {state: "refreshed"}`. Clients call it on connect. |
 | `messages.search`  | `{query, conversation_id?, since_ms?, until_ms?, limit?}`           | array of `{message_id, conversation_id, conversation_name, sender_name, body, snippet, timestamp_ms, timestamp_iso, is_from_me}` |
 | `messages.show`    | `{message_id}`                                                      | message |
 | `messages.context` | `{message_id, before?, after?}` (default 5/5)                       | array of messages, oldest-first, anchor included |
@@ -76,8 +77,14 @@ need `--read-only=false`):
 work: the query runs verbatim first (full FTS5 syntax — quoted phrases,
 AND/OR/NOT), and if FTS5 rejects it, terms are cleaned (edge punctuation
 trimmed, sub-3-character terms and stopwords dropped) and retried quoted
-with AND semantics, then with OR semantics if AND finds nothing. Terms need
-3+ characters to match (trigram index). Results are newest-first.
+with AND semantics. When requiring every term finds nothing — and the query
+contains no explicit FTS5 syntax — a final OR pass surfaces per-term
+matches. Terms need 3+ characters to match (trigram index). Results are
+newest-first.
+
+Messages returned by `chats.show`, `messages.list`, and `messages.context`
+are enriched with `sender_name` (alias > contact name > number) and
+`timestamp_iso`; search hits additionally carry `conversation_name`.
 
 ## Send policy and the approval queue
 
@@ -106,7 +113,7 @@ cleanly with code 1003.
 | `conversation.updated` | `{conversation}`                                 |
 | `approval.requested`   | approval row                                     |
 | `approval.resolved`    | approval row                                     |
-| `sync.status`          | `{state}`: `ready`, `phone_not_responding`, `phone_responding`, `listen_temporary_error`, `listen_recovered`, `logged_out` |
+| `sync.status`          | `{state}`: `ready`, `refreshed` (bulk import finished — refetch), `refresh_failed`, `phone_not_responding`, `phone_responding`, `listen_temporary_error`, `listen_recovered`, `logged_out` |
 
 Slow consumers may have events dropped rather than stall the daemon; treat
 the stream as advisory and re-query when reconnecting.

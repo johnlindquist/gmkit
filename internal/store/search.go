@@ -62,11 +62,14 @@ func (s *Store) SearchMessagesRich(ctx context.Context, opts SearchOpts) ([]Rich
 		if err != nil {
 			return nil, fmt.Errorf("fts search %q: %w", opts.Query, err)
 		}
-		// Tier 3: natural-language queries often contain words the message
-		// doesn't ("who's" vs "who is"). If requiring every term found
-		// nothing, take any term — still ordered newest-first, and callers
-		// get snippets to judge relevance.
-		if len(hits) == 0 && len(terms) > 1 {
+	}
+	// Tier 3: natural-language queries often contain words the messages
+	// don't ("who's" vs "who is", "camping tent" across two texts). When
+	// requiring every term finds nothing — and the user wasn't writing
+	// explicit FTS5 syntax — take any term: still newest-first, and callers
+	// get snippets to judge relevance.
+	if len(hits) == 0 && !looksLikeFTSSyntax(opts.Query) {
+		if terms := searchableTerms(opts.Query); len(terms) > 1 {
 			hits, err = s.searchOnce(ctx, joinQuoted(terms, " OR "), opts, limit)
 			if err != nil {
 				return nil, fmt.Errorf("fts search %q: %w", opts.Query, err)
@@ -82,7 +85,7 @@ func (s *Store) searchOnce(ctx context.Context, query string, opts SearchOpts, l
 	q.WriteString(`
 		SELECT m.message_id, m.conversation_id,
 		       COALESCE(m.body, ''),
-		       snippet(messages_fts, 1, '[', ']', ' … ', 12),
+		       snippet(messages_fts, 1, '[', ']', ' … ', 48),
 		       m.timestamp_ms, m.is_from_me,
 		       COALESCE(aa.alias, ct.name, ct.e164, '') AS sender_name
 		  FROM messages_fts
@@ -180,6 +183,22 @@ func searchableTerms(q string) []string {
 		terms = append(terms, f)
 	}
 	return terms
+}
+
+// looksLikeFTSSyntax reports whether the user is deliberately writing FTS5
+// query syntax (phrases, boolean operators, prefixes, column filters). Such
+// queries are treated as exact — no OR-degradation of their zero results.
+func looksLikeFTSSyntax(q string) bool {
+	if strings.ContainsAny(q, `"()*:^{}`) {
+		return true
+	}
+	for _, w := range strings.Fields(q) {
+		switch w {
+		case "AND", "OR", "NOT", "NEAR":
+			return true
+		}
+	}
+	return false
 }
 
 // joinQuoted builds an FTS5 query from literal terms: each is quoted (with

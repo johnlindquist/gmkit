@@ -72,10 +72,16 @@ pub struct Message {
     pub conversation_id: String,
     #[serde(default)]
     pub sender_id: String,
+    /// Resolved by the daemon (alias > contact name > number); may be empty
+    /// when talking to an older daemon.
+    #[serde(default)]
+    pub sender_name: String,
     #[serde(default)]
     pub body: Option<String>,
     #[serde(default)]
     pub timestamp_ms: i64,
+    #[serde(default)]
+    pub timestamp_iso: String,
     #[serde(default)]
     pub is_from_me: bool,
     #[serde(default)]
@@ -100,6 +106,8 @@ pub struct SearchHit {
     pub snippet: String,
     #[serde(default)]
     pub timestamp_ms: i64,
+    #[serde(default)]
+    pub timestamp_iso: String,
     #[serde(default)]
     pub is_from_me: bool,
 }
@@ -186,6 +194,14 @@ fn civil_from_days(z: i64) -> (i64, u32, u32) {
     let d = (doy - (153 * mp + 2) / 5 + 1) as u32;
     let m = if mp < 10 { mp + 3 } else { mp - 9 } as u32;
     (if m <= 2 { y + 1 } else { y }, m, d)
+}
+
+/// Shorten an RFC3339 timestamp to "YYYY-MM-DD HH:MM" for display.
+pub fn iso_short(iso: &str) -> String {
+    if iso.len() < 16 {
+        return iso.to_string();
+    }
+    iso[..16].replace('T', " ")
 }
 
 pub fn now_ms() -> i64 {
