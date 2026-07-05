@@ -1,10 +1,14 @@
-# gmcli
+# gmkit
 
-A standalone Go CLI that connects to Google Messages, archives conversations
-into a local SQLite + FTS5 database, and exposes a query surface suitable for
-shell use and LLM tool integrations — plus a daemon (`gmcli serve`), an MCP
-server for AI agents (`gmcli mcp`), and a Rust terminal UI
-([`gmtui/`](gmtui/)) with a human approval queue for agent-proposed sends.
+Google Messages for your terminal and your AI agents — local-first, with a
+human approval queue for anything an agent wants to send.
+
+gmkit ships one standalone Go binary, `gmcli` (CLI, sync daemon, and MCP
+server), that pairs with Google Messages and archives conversations into a
+local SQLite + FTS5 database, plus `gmtui` ([`gmtui/`](gmtui/)), a Rust
+terminal UI. gmkit builds on
+[fdsouvenir/gmcli](https://github.com/fdsouvenir/gmcli) and extends it with
+the daemon, agent, and TUI layers.
 
 ```
                  ┌───────────────────────────────┐
@@ -58,19 +62,33 @@ roughly every 14 days of inactivity (Google's policy, not ours).
 
 ## Install
 
-Requires Go 1.24 or newer.
+Quickest path (requires Go 1.24+; Rust optional, for the gmtui terminal UI):
 
 ```sh
-git clone https://github.com/fdsouvenir/gmcli
-cd gmcli
-go build -o gmcli .
+curl -fsSL https://raw.githubusercontent.com/johnlindquist/gmkit/main/install.sh | bash
+```
+
+Or from a clone:
+
+```sh
+git clone https://github.com/johnlindquist/gmkit
+cd gmkit
+./install.sh
+```
+
+The script installs `gmcli` into your Go bin dir and `gmtui` via cargo
+(skipped with a hint if Rust isn't installed). Manual equivalents:
+
+```sh
+go install github.com/johnlindquist/gmkit/cmd/gmcli@latest
+cargo install --git https://github.com/johnlindquist/gmkit gmtui
 ```
 
 For a source build whose `gmcli version` output includes the current tag or
 commit, inject it at link time:
 
 ```sh
-go build -ldflags "-X github.com/fdsouvenir/gmcli/cmd.Version=$(git describe --tags --always --dirty)" -o gmcli .
+go build -ldflags "-X github.com/johnlindquist/gmkit/internal/cmd.Version=$(git describe --tags --always --dirty)" -o gmcli ./cmd/gmcli
 ```
 
 Pre-built binary distribution and Homebrew packaging are planned after the

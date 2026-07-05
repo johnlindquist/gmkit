@@ -8,8 +8,8 @@ import (
 
 	"github.com/spf13/cobra"
 
-	"github.com/fdsouvenir/gmcli/internal/output"
-	"github.com/fdsouvenir/gmcli/internal/store"
+	"github.com/johnlindquist/gmkit/internal/output"
+	"github.com/johnlindquist/gmkit/internal/store"
 )
 
 func contactsCmd() *cobra.Command {

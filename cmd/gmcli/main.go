@@ -8,7 +8,7 @@ import (
 	"fmt"
 	"os"
 
-	"github.com/fdsouvenir/gmcli/cmd"
+	"github.com/johnlindquist/gmkit/internal/cmd"
 )
 
 func main() {

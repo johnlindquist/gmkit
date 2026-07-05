@@ -5,7 +5,7 @@ edition = "2021"
 rust-version = "1.86"
 description = "Terminal UI for gmcli — browse, search, and approve Google Messages from your terminal"
 license = "AGPL-3.0-or-later"
-repository = "https://github.com/fdsouvenir/gmcli"
+repository = "https://github.com/johnlindquist/gmkit"
 
 [dependencies]
 # Core TUI

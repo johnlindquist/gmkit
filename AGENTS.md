@@ -2,7 +2,7 @@
 
 ## Project Structure & Module Organization
 
-`gmcli` is a Go 1.24 CLI for Google Messages. `main.go` wires into the Cobra command tree in `cmd/`. Keep user-facing verbs and flags in `cmd/`, and reusable implementation in `internal/`:
+`gmkit` (module `github.com/johnlindquist/gmkit`) is a Go 1.24 CLI for Google Messages. `cmd/gmcli/main.go` is the entrypoint; it wires into the Cobra command tree in `internal/cmd/`. Keep user-facing verbs and flags in `internal/cmd/`, and reusable implementation in the other `internal/` packages:
 
 - `internal/gm/`: session, pairing, sync events, send/react, media.
 - `internal/store/`: SQLite schema, queries, aliases, approvals, message/contact persistence.
@@ -19,8 +19,9 @@ Tests live beside their packages as `*_test.go`.
 
 ## Build, Test, and Development Commands
 
-- `go build -o gmcli .` builds the local binary.
-- `go build -ldflags "-X github.com/fdsouvenir/gmcli/cmd.Version=$(git describe --tags --always --dirty)" -o gmcli .` builds with version metadata.
+- `go build -o gmcli ./cmd/gmcli` builds the local binary.
+- `go build -ldflags "-X github.com/johnlindquist/gmkit/internal/cmd.Version=$(git describe --tags --always --dirty)" -o gmcli ./cmd/gmcli` builds with version metadata.
+- `./install.sh` builds and globally installs both gmcli and gmtui.
 - `go test ./...` runs the full test suite used by CI.
 - `go vet ./...` runs static checks used by CI.
 - `./gmcli --help` or `./gmcli <command> --help` validates command wiring while developing.

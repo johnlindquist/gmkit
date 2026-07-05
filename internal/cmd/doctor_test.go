@@ -5,7 +5,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/fdsouvenir/gmcli/internal/store"
+	"github.com/johnlindquist/gmkit/internal/store"
 )
 
 func TestRunDoctorReportsLastSyncActivityTime(t *testing.T) {

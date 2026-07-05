@@ -8,8 +8,8 @@ import (
 
 	"github.com/google/uuid"
 
-	"github.com/fdsouvenir/gmcli/internal/history"
-	"github.com/fdsouvenir/gmcli/internal/store"
+	"github.com/johnlindquist/gmkit/internal/history"
+	"github.com/johnlindquist/gmkit/internal/store"
 )
 
 func (s *Server) dispatch(ctx context.Context, c *serverConn, method string, params json.RawMessage) (any, *Error) {

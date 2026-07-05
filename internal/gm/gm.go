@@ -28,7 +28,7 @@ import (
 	"go.mau.fi/mautrix-gmessages/pkg/libgm/events"
 	"go.mau.fi/mautrix-gmessages/pkg/libgm/gmproto"
 
-	"github.com/fdsouvenir/gmcli/internal/paths"
+	"github.com/johnlindquist/gmkit/internal/paths"
 )
 
 // PairTimeout is the upper bound on how long we wait for a phone to scan the

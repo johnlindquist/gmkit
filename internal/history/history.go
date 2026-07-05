@@ -9,9 +9,9 @@ import (
 
 	"go.mau.fi/mautrix-gmessages/pkg/libgm/gmproto"
 
-	"github.com/fdsouvenir/gmcli/internal/gm"
-	"github.com/fdsouvenir/gmcli/internal/store"
-	gmsync "github.com/fdsouvenir/gmcli/internal/sync"
+	"github.com/johnlindquist/gmkit/internal/gm"
+	"github.com/johnlindquist/gmkit/internal/store"
+	gmsync "github.com/johnlindquist/gmkit/internal/sync"
 )
 
 // BackfillResult reports what a backfill run accomplished. Protocol records

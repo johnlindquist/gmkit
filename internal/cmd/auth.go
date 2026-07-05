@@ -8,7 +8,7 @@ import (
 	"github.com/mdp/qrterminal/v3"
 	"github.com/spf13/cobra"
 
-	"github.com/fdsouvenir/gmcli/internal/gm"
+	"github.com/johnlindquist/gmkit/internal/gm"
 )
 
 func authCmd() *cobra.Command {

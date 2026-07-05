@@ -6,7 +6,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/fdsouvenir/gmcli/internal/store"
+	"github.com/johnlindquist/gmkit/internal/store"
 )
 
 // seedThread inserts a conversation and `n` messages 1ms apart, alternating

@@ -14,8 +14,8 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/fdsouvenir/gmcli/internal/paths"
-	"github.com/fdsouvenir/gmcli/internal/rpc"
+	"github.com/johnlindquist/gmkit/internal/paths"
+	"github.com/johnlindquist/gmkit/internal/rpc"
 )
 
 // Options tunes EnsureRunning.

@@ -6,7 +6,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/fdsouvenir/gmcli/cmd"
+	"github.com/johnlindquist/gmkit/internal/cmd"
 )
 
 // runCmdAllowError is like runCmd but returns the execution error instead of

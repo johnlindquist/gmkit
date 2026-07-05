@@ -4,7 +4,7 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/fdsouvenir/gmcli/internal/paths"
+	"github.com/johnlindquist/gmkit/internal/paths"
 )
 
 func TestResolveExplicit(t *testing.T) {

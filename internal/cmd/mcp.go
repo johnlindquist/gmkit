@@ -10,11 +10,11 @@ import (
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 	"github.com/spf13/cobra"
 
-	"github.com/fdsouvenir/gmcli/internal/daemonctl"
-	"github.com/fdsouvenir/gmcli/internal/history"
-	"github.com/fdsouvenir/gmcli/internal/paths"
-	"github.com/fdsouvenir/gmcli/internal/rpc"
-	"github.com/fdsouvenir/gmcli/internal/store"
+	"github.com/johnlindquist/gmkit/internal/daemonctl"
+	"github.com/johnlindquist/gmkit/internal/history"
+	"github.com/johnlindquist/gmkit/internal/paths"
+	"github.com/johnlindquist/gmkit/internal/rpc"
+	"github.com/johnlindquist/gmkit/internal/store"
 )
 
 // mcpLiveTimeout bounds one daemon-proxied call (send, backfill).

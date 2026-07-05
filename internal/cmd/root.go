@@ -10,10 +10,10 @@ import (
 	"github.com/rs/zerolog"
 	"github.com/spf13/cobra"
 
-	"github.com/fdsouvenir/gmcli/internal/logging"
-	"github.com/fdsouvenir/gmcli/internal/output"
-	"github.com/fdsouvenir/gmcli/internal/paths"
-	"github.com/fdsouvenir/gmcli/internal/store"
+	"github.com/johnlindquist/gmkit/internal/logging"
+	"github.com/johnlindquist/gmkit/internal/output"
+	"github.com/johnlindquist/gmkit/internal/paths"
+	"github.com/johnlindquist/gmkit/internal/store"
 )
 
 // globalFlags is populated by persistent flags on the root command and

@@ -8,10 +8,10 @@ import (
 
 	"github.com/spf13/cobra"
 
-	"github.com/fdsouvenir/gmcli/internal/gm"
-	"github.com/fdsouvenir/gmcli/internal/output"
-	"github.com/fdsouvenir/gmcli/internal/store"
-	gmsync "github.com/fdsouvenir/gmcli/internal/sync"
+	"github.com/johnlindquist/gmkit/internal/gm"
+	"github.com/johnlindquist/gmkit/internal/output"
+	"github.com/johnlindquist/gmkit/internal/store"
+	gmsync "github.com/johnlindquist/gmkit/internal/sync"
 )
 
 // readyTimeout is how long send/react wait for the libgm session to come up

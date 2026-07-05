@@ -1,6 +1,6 @@
 # gmtui
 
-A terminal UI for [gmcli](https://github.com/fdsouvenir/gmcli): browse,
+A terminal UI for [gmcli](https://github.com/johnlindquist/gmkit): browse,
 search, and send Google Messages from your terminal — with a human approval
 queue for messages proposed by AI agents.
 

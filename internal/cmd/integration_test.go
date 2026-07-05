@@ -10,8 +10,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/fdsouvenir/gmcli/cmd"
-	"github.com/fdsouvenir/gmcli/internal/store"
+	"github.com/johnlindquist/gmkit/internal/cmd"
+	"github.com/johnlindquist/gmkit/internal/store"
 )
 
 // seedStore creates a fresh gmcli store directory with a known dataset and

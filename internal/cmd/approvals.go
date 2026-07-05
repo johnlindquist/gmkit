@@ -8,10 +8,10 @@ import (
 
 	"github.com/spf13/cobra"
 
-	"github.com/fdsouvenir/gmcli/internal/daemonctl"
-	"github.com/fdsouvenir/gmcli/internal/output"
-	"github.com/fdsouvenir/gmcli/internal/rpc"
-	"github.com/fdsouvenir/gmcli/internal/store"
+	"github.com/johnlindquist/gmkit/internal/daemonctl"
+	"github.com/johnlindquist/gmkit/internal/output"
+	"github.com/johnlindquist/gmkit/internal/rpc"
+	"github.com/johnlindquist/gmkit/internal/store"
 )
 
 // approvalCallTimeout bounds one approvals RPC. Approve performs a live send

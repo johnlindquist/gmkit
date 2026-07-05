@@ -5,7 +5,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/fdsouvenir/gmcli/internal/history"
+	"github.com/johnlindquist/gmkit/internal/history"
 )
 
 func TestHistoryBackfillResultJSONIsUnambiguous(t *testing.T) {

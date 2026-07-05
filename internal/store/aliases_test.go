@@ -5,7 +5,7 @@ import (
 	"errors"
 	"testing"
 
-	"github.com/fdsouvenir/gmcli/internal/store"
+	"github.com/johnlindquist/gmkit/internal/store"
 )
 
 func TestAliasSetGetRemove(t *testing.T) {

@@ -10,7 +10,7 @@ import (
 )
 
 // Version is overridden for release builds with:
-// -ldflags "-X github.com/fdsouvenir/gmcli/cmd.Version=vX.Y.Z"
+// -ldflags "-X github.com/johnlindquist/gmkit/internal/cmd.Version=vX.Y.Z"
 var Version = "dev"
 
 const licenseNotice = "gmcli is licensed under GNU AGPL-3.0. " +

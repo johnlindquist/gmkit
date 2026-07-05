@@ -7,11 +7,11 @@ import (
 
 	"github.com/spf13/cobra"
 
-	"github.com/fdsouvenir/gmcli/internal/gm"
-	"github.com/fdsouvenir/gmcli/internal/history"
-	"github.com/fdsouvenir/gmcli/internal/output"
-	"github.com/fdsouvenir/gmcli/internal/store"
-	gmsync "github.com/fdsouvenir/gmcli/internal/sync"
+	"github.com/johnlindquist/gmkit/internal/gm"
+	"github.com/johnlindquist/gmkit/internal/history"
+	"github.com/johnlindquist/gmkit/internal/output"
+	"github.com/johnlindquist/gmkit/internal/store"
+	gmsync "github.com/johnlindquist/gmkit/internal/sync"
 )
 
 func historyCmd() *cobra.Command {

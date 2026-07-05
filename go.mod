@@ -1,4 +1,4 @@
-module github.com/fdsouvenir/gmcli
+module github.com/johnlindquist/gmkit
 
 go 1.25.0
 

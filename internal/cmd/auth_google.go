@@ -10,7 +10,7 @@ import (
 
 	"github.com/spf13/cobra"
 
-	"github.com/fdsouvenir/gmcli/internal/gm"
+	"github.com/johnlindquist/gmkit/internal/gm"
 )
 
 var requiredGoogleCookies = []string{"SID", "HSID", "OSID", "SSID", "APISID", "SAPISID"}

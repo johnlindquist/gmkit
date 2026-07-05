@@ -6,7 +6,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/fdsouvenir/gmcli/internal/store"
+	"github.com/johnlindquist/gmkit/internal/store"
 )
 
 func openTempStore(t *testing.T) *store.Store {

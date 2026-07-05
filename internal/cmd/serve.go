@@ -8,10 +8,10 @@ import (
 
 	"github.com/spf13/cobra"
 
-	"github.com/fdsouvenir/gmcli/internal/gm"
-	"github.com/fdsouvenir/gmcli/internal/rpc"
-	"github.com/fdsouvenir/gmcli/internal/store"
-	gmsync "github.com/fdsouvenir/gmcli/internal/sync"
+	"github.com/johnlindquist/gmkit/internal/gm"
+	"github.com/johnlindquist/gmkit/internal/rpc"
+	"github.com/johnlindquist/gmkit/internal/store"
+	gmsync "github.com/johnlindquist/gmkit/internal/sync"
 )
 
 func serveCmd() *cobra.Command {
