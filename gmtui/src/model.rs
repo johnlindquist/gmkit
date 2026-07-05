@@ -13,6 +13,9 @@ pub struct Conversation {
     pub conversation_id: String,
     #[serde(default)]
     pub name: String,
+    /// Local user label (set with `n` / alias.set); overrides name.
+    #[serde(default)]
+    pub alias: String,
     #[serde(default)]
     pub is_group: bool,
     /// JSON-encoded array of participants, verbatim from the store.
@@ -45,9 +48,12 @@ impl Conversation {
         serde_json::from_str(&self.participants_json).unwrap_or_default()
     }
 
-    /// Best display name: explicit name, else the other participants' names,
-    /// else the conversation ID.
+    /// Best display name: local alias, explicit name, else the other
+    /// participants' names, else the conversation ID.
     pub fn display_name(&self) -> String {
+        if !self.alias.trim().is_empty() {
+            return self.alias.clone();
+        }
         if !self.name.trim().is_empty() {
             return self.name.clone();
         }

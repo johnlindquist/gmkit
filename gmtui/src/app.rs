@@ -56,14 +56,43 @@ pub enum Focus {
     Compose,
 }
 
-/// State of the in-TUI pairing flow (auth.pair on the daemon).
+/// Where the in-TUI pairing flow currently is. Google killed QR pairing on
+/// current Messages builds, so the Google-account (cookie + emoji) flow is
+/// the primary path; QR remains reachable as a legacy fallback.
+#[derive(PartialEq)]
+pub enum PairStage {
+    /// Collecting pasted browser cookies for the Google-account flow.
+    EnterCookies,
+    /// RPC accepted; waiting for the daemon to talk to Google.
+    Waiting,
+    /// Legacy QR flow: render this code.
+    ShowQr,
+    /// Google flow: tap this emoji on the phone.
+    Emoji(String),
+    Failed,
+    Succeeded,
+}
+
+/// State of the in-TUI pairing flow.
 pub struct Pairing {
-    /// Rendered unicode QR (multi-line), once the daemon sends the URL.
+    pub stage: PairStage,
+    pub input: Input,
+    /// Rendered unicode QR (multi-line), legacy flow only.
     pub qr: Option<String>,
     pub url: Option<String>,
     pub message: String,
-    pub failed: bool,
-    pub succeeded: bool,
+}
+
+/// A one-line text prompt overlay (alias editing, reactions).
+pub enum PromptKind {
+    Alias { conversation_id: String },
+    React { message_id: String },
+}
+
+pub struct Prompt {
+    pub kind: PromptKind,
+    pub input: Input,
+    pub title: String,
 }
 
 /// Identifies what the omni preview pane should show for a selection.
@@ -147,6 +176,10 @@ pub struct App {
 
     /// Some(_) while the pairing overlay is open.
     pub pairing: Option<Pairing>,
+    /// Some(_) while a text prompt (alias, reaction) is open.
+    pub prompt: Option<Prompt>,
+    /// Diagnostics / key-reference overlay.
+    pub show_doctor: bool,
 
     pub status: DaemonStatus,
     pub flash: Option<(String, i64)>,
@@ -178,6 +211,8 @@ impl App {
             approvals: Vec::new(),
             approval_state: ListState::default(),
             pairing: None,
+            prompt: None,
+            show_doctor: false,
             status: DaemonStatus::default(),
             flash: None,
         }
@@ -460,26 +495,146 @@ impl App {
         });
     }
 
-    /// Open the pairing overlay and kick off the daemon-side QR flow. The
-    /// daemon broadcasts pair.qr / pair.success / pair.error; on success it
+    /// Open the pairing overlay in the Google-account flow: paste browser
+    /// cookies, then tap the emoji Google shows on the phone. The daemon
+    /// broadcasts pair.emoji / pair.success / pair.error; on success it
     /// restarts itself and our reconnect loop finishes the job.
     fn start_pairing(&mut self) {
         self.pairing = Some(Pairing {
+            stage: PairStage::EnterCookies,
+            input: Input::default(),
             qr: None,
             url: None,
-            message: "requesting a pairing QR from Google…".to_string(),
-            failed: false,
-            succeeded: false,
+            message: String::new(),
         });
+    }
+
+    /// Submit the pasted cookies to the daemon's Google pairing flow.
+    fn submit_pairing_cookies(&mut self) {
+        let Some(p) = self.pairing.as_mut() else {
+            return;
+        };
+        let cookies = p.input.value().trim().to_string();
+        if cookies.is_empty() {
+            p.message = "paste your messages.google.com cookies first".to_string();
+            return;
+        }
+        p.stage = PairStage::Waiting;
+        p.message = "checking cookies with Google…".to_string();
+        let rpc = self.rpc.clone();
+        self.spawn(async move {
+            match rpc
+                .call("auth.pair.google", json!({"cookies_input": cookies}))
+                .await
+            {
+                Ok(_) => None,
+                Err(e) => Some(AppEvent::PairingFailed(format!("{e}"))),
+            }
+        });
+    }
+
+    /// Legacy QR flow (Google no longer offers the scanner on current
+    /// Messages builds, but older builds still have it).
+    fn start_qr_pairing(&mut self) {
+        if let Some(p) = self.pairing.as_mut() {
+            p.stage = PairStage::Waiting;
+            p.message = "requesting a pairing QR from Google…".to_string();
+        }
         let rpc = self.rpc.clone();
         self.spawn(async move {
             match rpc.call("auth.pair", json!({})).await {
                 Ok(_) => None,
                 Err(e) => Some(AppEvent::PairingFailed(format!(
-                    "could not start pairing: {e}"
+                    "could not start QR pairing: {e}"
                 ))),
             }
         });
+    }
+
+    /// Download the selected message's attachment and open it with the
+    /// system opener.
+    fn open_media(&mut self) {
+        let Some(m) = self.msg_state.selected().and_then(|i| self.messages.get(i)) else {
+            self.flash("no message selected");
+            return;
+        };
+        if m.media_id.is_none() {
+            self.flash("selected message has no attachment");
+            return;
+        }
+        let message_id = m.message_id.clone();
+        self.flash("downloading attachment…");
+        let rpc = self.rpc.clone();
+        self.spawn(async move {
+            #[derive(serde::Deserialize, Default)]
+            struct Dl {
+                #[serde(default)]
+                path: String,
+            }
+            match rpc
+                .call_as::<Dl>("media.download", json!({"message_id": message_id}))
+                .await
+            {
+                Ok(dl) if !dl.path.is_empty() => {
+                    let opener = if cfg!(target_os = "macos") {
+                        "open"
+                    } else {
+                        "xdg-open"
+                    };
+                    let _ = std::process::Command::new(opener).arg(&dl.path).spawn();
+                    Some(AppEvent::Flash(format!("opened {}", dl.path)))
+                }
+                Ok(_) => Some(AppEvent::Flash("download returned no path".to_string())),
+                Err(e) => Some(AppEvent::Flash(format!("media: {e}"))),
+            }
+        });
+    }
+
+    fn submit_prompt(&mut self) {
+        let Some(prompt) = self.prompt.take() else {
+            return;
+        };
+        let value = prompt.input.value().trim().to_string();
+        let rpc = self.rpc.clone();
+        match prompt.kind {
+            PromptKind::Alias { conversation_id } => {
+                // Empty input clears the alias.
+                let clearing = value.is_empty();
+                self.spawn(async move {
+                    let (method, params) = if clearing {
+                        ("alias.rm", json!({"target_type": "conversation", "target_id": conversation_id}))
+                    } else {
+                        ("alias.set", json!({"target_type": "conversation", "target_id": conversation_id, "alias": value}))
+                    };
+                    match rpc.call(method, params).await {
+                        Ok(_) => Some(AppEvent::Flash(if clearing {
+                            "alias cleared".to_string()
+                        } else {
+                            "renamed ✓".to_string()
+                        })),
+                        Err(e) => Some(AppEvent::Flash(format!("alias: {e}"))),
+                    }
+                });
+                self.fetch_chats();
+            }
+            PromptKind::React { message_id } => {
+                if value.is_empty() {
+                    return;
+                }
+                self.spawn(async move {
+                    match rpc
+                        .call(
+                            "send.react",
+                            json!({"message_id": message_id, "emoji": value}),
+                        )
+                        .await
+                    {
+                        Ok(_) => Some(AppEvent::Flash(format!("reacted {value}"))),
+                        Err(e) => Some(AppEvent::Flash(format!("react: {e}"))),
+                    }
+                });
+            }
+        }
     }
 
     /// Backfill older history for the currently open conversation.
@@ -745,7 +900,7 @@ impl App {
             }
             AppEvent::PairingFailed(msg) => {
                 if let Some(p) = self.pairing.as_mut() {
-                    p.failed = true;
+                    p.stage = PairStage::Failed;
                     p.message = format!("{msg} — press p to retry, esc to close");
                 }
             }
@@ -821,6 +976,7 @@ impl App {
                         .and_then(serde_json::Value::as_str)
                         .unwrap_or_default()
                         .to_string();
+                    p.stage = PairStage::ShowQr;
                     p.qr = render_qr(&url);
                     p.url = Some(url);
                     p.message =
@@ -828,9 +984,22 @@ impl App {
                             .to_string();
                 }
             }
+            "pair.emoji" => {
+                if let Some(p) = self.pairing.as_mut() {
+                    let emoji = ev
+                        .data
+                        .get("emoji")
+                        .and_then(serde_json::Value::as_str)
+                        .unwrap_or("?")
+                        .to_string();
+                    p.stage = PairStage::Emoji(emoji);
+                    p.message = "on your phone: Google Messages shows several emoji — tap this one"
+                        .to_string();
+                }
+            }
             "pair.success" => {
                 if let Some(p) = self.pairing.as_mut() {
-                    p.succeeded = true;
+                    p.stage = PairStage::Succeeded;
                     p.qr = None;
                     p.message =
                         "paired ✓ — restarting the daemon with the new session…".to_string();
@@ -839,7 +1008,7 @@ impl App {
             }
             "pair.error" => {
                 if let Some(p) = self.pairing.as_mut() {
-                    p.failed = true;
+                    p.stage = PairStage::Failed;
                     p.qr = None;
                     p.message = format!(
                         "pairing failed: {} — press p to retry, esc to close",
@@ -874,7 +1043,11 @@ impl App {
                         self.preview_cache.clear();
                         // Pairing epilogue: the post-restart daemon has
                         // synced — we're fully back.
-                        if self.pairing.as_ref().is_some_and(|p| p.succeeded) {
+                        if self
+                            .pairing
+                            .as_ref()
+                            .is_some_and(|p| p.stage == PairStage::Succeeded)
+                        {
                             self.pairing = None;
                             self.flash("paired ✓ — messages syncing");
                         }
@@ -997,6 +1170,11 @@ impl App {
     }
 
     pub fn handle_term_event(&mut self, ev: TermEvent) {
+        if let TermEvent::Paste(text) = &ev {
+            let text = text.clone();
+            self.handle_paste(&text);
+            return;
+        }
         if let TermEvent::Key(key) = ev {
             if key.kind != KeyEventKind::Press {
                 return;
@@ -1007,7 +1185,15 @@ impl App {
                 return;
             }
             if self.pairing.is_some() {
-                self.handle_pairing_key(key);
+                self.handle_pairing_key(key, ev);
+                return;
+            }
+            if self.prompt.is_some() {
+                self.handle_prompt_key(key, ev);
+                return;
+            }
+            if self.show_doctor {
+                self.show_doctor = false;
                 return;
             }
             if self.show_approvals {
@@ -1081,18 +1267,76 @@ impl App {
         }
     }
 
-    fn handle_pairing_key(&mut self, key: KeyEvent) {
-        let failed = self.pairing.as_ref().is_some_and(|p| p.failed);
-        let succeeded = self.pairing.as_ref().is_some_and(|p| p.succeeded);
+    fn handle_pairing_key(&mut self, key: KeyEvent, raw: TermEvent) {
+        let stage_entering = self
+            .pairing
+            .as_ref()
+            .is_some_and(|p| p.stage == PairStage::EnterCookies);
+        let failed = self
+            .pairing
+            .as_ref()
+            .is_some_and(|p| p.stage == PairStage::Failed);
         match key.code {
-            KeyCode::Esc | KeyCode::Char('q') => {
+            KeyCode::Esc => {
                 // Closing early is harmless: post-success the reconnect
-                // continues regardless, and an in-flight QR just expires.
-                let _ = succeeded;
+                // continues regardless, and in-flight flows just expire.
                 self.pairing = None;
             }
+            KeyCode::Enter if stage_entering => self.submit_pairing_cookies(),
+            // Legacy QR flow escape hatch (older Messages builds only).
+            KeyCode::Char('r')
+                if key.modifiers.contains(KeyModifiers::CONTROL) && stage_entering =>
+            {
+                self.start_qr_pairing()
+            }
             KeyCode::Char('p') if failed => self.start_pairing(),
+            KeyCode::Char('q') if !stage_entering => self.pairing = None,
+            _ if stage_entering => {
+                if let Some(p) = self.pairing.as_mut() {
+                    p.input.handle_event(&raw);
+                }
+            }
             _ => {}
+        }
+    }
+
+    fn handle_prompt_key(&mut self, key: KeyEvent, raw: TermEvent) {
+        match key.code {
+            KeyCode::Esc => self.prompt = None,
+            KeyCode::Enter => self.submit_prompt(),
+            _ => {
+                if let Some(p) = self.prompt.as_mut() {
+                    p.input.handle_event(&raw);
+                }
+            }
+        }
+    }
+
+    /// Route bracketed-paste text into whichever input is active.
+    fn handle_paste(&mut self, text: &str) {
+        let target = if let Some(p) = self
+            .pairing
+            .as_mut()
+            .filter(|p| p.stage == PairStage::EnterCookies)
+        {
+            Some(&mut p.input)
+        } else if let Some(p) = self.prompt.as_mut() {
+            Some(&mut p.input)
+        } else if self.focus == Focus::Compose {
+            Some(&mut self.compose_input)
+        } else if self.focus == Focus::Omni {
+            Some(&mut self.omni.input)
+        } else {
+            None
+        };
+        let Some(input) = target else { return };
+        for c in text.chars() {
+            if c != '\n' && c != '\r' {
+                let _ = input.handle(tui_input::InputRequest::InsertChar(c));
+            }
+        }
+        if self.focus == Focus::Omni && self.pairing.is_none() && self.prompt.is_none() {
+            self.refresh_omni_local();
         }
     }
 
@@ -1165,6 +1409,20 @@ impl App {
                 self.fetch_approvals();
             }
             KeyCode::Char('p') => self.start_pairing(),
+            KeyCode::Char('d') => self.show_doctor = true,
+            KeyCode::Char('n') => {
+                if let Some(c) = self.chat_state.selected().and_then(|i| self.chats.get(i)) {
+                    let id = c.conversation_id.clone();
+                    let name = c.display_name();
+                    self.prompt = Some(Prompt {
+                        kind: PromptKind::Alias {
+                            conversation_id: id,
+                        },
+                        input: Input::default(),
+                        title: format!("rename “{name}” (empty clears) — enter saves, esc cancels"),
+                    });
+                }
+            }
             KeyCode::Char('r') => {
                 self.fetch_chats();
                 self.fetch_status();
@@ -1207,6 +1465,19 @@ impl App {
             }
             KeyCode::Char('p') => self.start_pairing(),
             KeyCode::Char('b') => self.backfill_current_chat(),
+            KeyCode::Char('d') => self.show_doctor = true,
+            KeyCode::Char('o') => self.open_media(),
+            KeyCode::Char('e') => {
+                if let Some(m) = self.msg_state.selected().and_then(|i| self.messages.get(i)) {
+                    let id = m.message_id.clone();
+                    self.prompt = Some(Prompt {
+                        kind: PromptKind::React { message_id: id },
+                        input: Input::default(),
+                        title: "react — type/paste an emoji (👍 ❤️ 😂 😮 😢 👎), enter sends"
+                            .to_string(),
+                    });
+                }
+            }
             KeyCode::Char('r') => {
                 if let Some(chat) = self.current_chat.clone() {
                     self.open_chat(chat);

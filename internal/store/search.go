@@ -246,7 +246,8 @@ func (s *Store) FindConversations(ctx context.Context, query string, limit int) 
 
 	q := `
 		SELECT c.conversation_id, c.source_platform, c.name, c.is_group, c.participants_json,
-		       c.last_message_ts, c.unread, c.pinned, c.archived, c.updated_at
+		       c.last_message_ts, c.unread, c.pinned, c.archived, c.updated_at,
+		       COALESCE(a.alias, '')
 		  FROM conversations c
 		  LEFT JOIN aliases a ON a.target_type = 'conversation' AND a.target_id = c.conversation_id
 		 WHERE ` + strings.Join(clauses, " OR ") + `
@@ -283,6 +284,9 @@ type participantSummary struct {
 // the explicit name if set, otherwise the other participants' names or
 // numbers, otherwise the conversation ID.
 func (c Conversation) DisplayName() string {
+	if strings.TrimSpace(c.Alias) != "" {
+		return c.Alias
+	}
 	if strings.TrimSpace(c.Name) != "" {
 		return c.Name
 	}

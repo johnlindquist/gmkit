@@ -4,6 +4,9 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"mime"
+	"os"
+	"path/filepath"
 	"time"
 
 	"github.com/google/uuid"
@@ -45,6 +48,16 @@ func (s *Server) dispatch(ctx context.Context, c *serverConn, method string, par
 		return s.handleSyncRefresh(ctx)
 	case "auth.pair":
 		return s.handleAuthPair()
+	case "auth.pair.google":
+		return s.handleAuthPairGoogle(params)
+	case "media.download":
+		return s.handleMediaDownload(ctx, params)
+	case "alias.set":
+		return s.handleAliasSet(ctx, params)
+	case "alias.rm":
+		return s.handleAliasRm(ctx, params)
+	case "send.react":
+		return s.handleSendReact(params)
 	case "daemon.shutdown":
 		// Used by `gmcli auth` after re-pairing: the daemon must restart to
 		// load the new session; on-demand clients spawn a fresh one.
@@ -411,6 +424,198 @@ func (s *Server) runPairing() {
 	// the daemon comes back with the fresh session.
 	time.Sleep(500 * time.Millisecond)
 	s.requestShutdown()
+}
+
+type authPairGoogleParams struct {
+	// Free-form pasted cookie input: raw Cookie header, Copy-as-cURL,
+	// Copy-as-fetch, or a JSON map.
+	CookiesInput string `json:"cookies_input"`
+}
+
+// handleAuthPairGoogle starts the Google-account pairing flow (the QR flow
+// no longer works on current Google Messages builds). The daemon broadcasts
+// pair.emoji with the confirmation emoji to tap on the phone, then
+// pair.success/pair.error; on success it restarts to load the new session.
+func (s *Server) handleAuthPairGoogle(params json.RawMessage) (any, *Error) {
+	p, perr := decode[authPairGoogleParams](params)
+	if perr != nil {
+		return nil, perr
+	}
+	if s.deps.Layout.Session == "" {
+		return nil, &Error{Code: CodeUnavailable, Message: "pairing is not available on this daemon"}
+	}
+	cookies, err := gm.ParseGoogleCookieInput(p.CookiesInput)
+	if err != nil {
+		return nil, &Error{Code: CodeInvalidParams, Message: err.Error()}
+	}
+	if !s.pairing.CompareAndSwap(false, true) {
+		return map[string]any{"started": false, "reason": "pairing already in progress"}, nil
+	}
+	if s.deps.Client != nil {
+		s.deps.Client.Disconnect()
+	}
+	go s.runGooglePairing(cookies)
+	return map[string]any{"started": true}, nil
+}
+
+func (s *Server) runGooglePairing(cookies map[string]string) {
+	defer s.pairing.Store(false)
+	ctx, cancel := context.WithTimeout(context.Background(), gm.PairTimeout+30*time.Second)
+	defer cancel()
+
+	res, err := gm.PairGoogle(ctx, s.deps.Layout, s.deps.Logger, cookies, func(emoji string) {
+		s.Broadcast(EventPairEmoji, map[string]any{"emoji": emoji})
+	})
+	if err != nil {
+		s.deps.Logger.Warn().Err(err).Msg("in-daemon google pairing failed")
+		s.Broadcast(EventPairError, map[string]any{"error": err.Error()})
+		return
+	}
+	s.authExpired.Store(false)
+	s.deps.Logger.Info().Str("phone_id", res.PhoneID).Msg("paired via TUI (google flow); restarting daemon")
+	s.Broadcast(EventPairSuccess, map[string]any{"phone_id": res.PhoneID})
+	time.Sleep(500 * time.Millisecond)
+	s.requestShutdown()
+}
+
+type mediaDownloadParams struct {
+	MessageID string `json:"message_id"`
+}
+
+func (s *Server) handleMediaDownload(ctx context.Context, params json.RawMessage) (any, *Error) {
+	p, perr := decode[mediaDownloadParams](params)
+	if perr != nil {
+		return nil, perr
+	}
+	if p.MessageID == "" {
+		return nil, &Error{Code: CodeInvalidParams, Message: "message_id is required"}
+	}
+	if s.deps.Client == nil {
+		return nil, &Error{Code: CodeUnavailable, Message: "phone connection unavailable"}
+	}
+	m, err := s.deps.Store.GetMessage(ctx, p.MessageID)
+	if errors.Is(err, store.ErrNotFound) {
+		return nil, &Error{Code: CodeNotFound, Message: "message not found: " + p.MessageID}
+	}
+	if err != nil {
+		return nil, internalErr(err)
+	}
+	if m.MediaID == nil || *m.MediaID == "" {
+		return nil, &Error{Code: CodeNotFound, Message: "message has no attached media"}
+	}
+	if len(m.DecryptionKey) == 0 {
+		return nil, &Error{Code: CodeUnavailable, Message: "media has no decryption key (stripped during sync?)"}
+	}
+	s.liveMu.Lock()
+	bytes, err := s.deps.Client.DownloadMedia(*m.MediaID, m.DecryptionKey)
+	s.liveMu.Unlock()
+	if err != nil {
+		return nil, &Error{Code: CodeUnavailable, Message: "download: " + err.Error()}
+	}
+	ext := ""
+	if m.MimeType != nil {
+		if exts, err := mime.ExtensionsByType(*m.MimeType); err == nil && len(exts) > 0 {
+			ext = exts[0]
+		}
+	}
+	path := filepath.Join(s.deps.Layout.MediaDir, m.ID+ext)
+	if err := os.WriteFile(path, bytes, 0o600); err != nil {
+		return nil, internalErr(err)
+	}
+	mimeType := ""
+	if m.MimeType != nil {
+		mimeType = *m.MimeType
+	}
+	return map[string]any{"path": path, "bytes": len(bytes), "mime_type": mimeType}, nil
+}
+
+type aliasParams struct {
+	TargetType string `json:"target_type"` // contact | conversation
+	TargetID   string `json:"target_id"`
+	Alias      string `json:"alias"`
+}
+
+func aliasTarget(t string) (store.AliasTarget, *Error) {
+	switch t {
+	case "contact":
+		return store.AliasContact, nil
+	case "conversation":
+		return store.AliasConversation, nil
+	default:
+		return "", &Error{Code: CodeInvalidParams, Message: "target_type must be contact or conversation"}
+	}
+}
+
+func (s *Server) handleAliasSet(ctx context.Context, params json.RawMessage) (any, *Error) {
+	p, perr := decode[aliasParams](params)
+	if perr != nil {
+		return nil, perr
+	}
+	target, terr := aliasTarget(p.TargetType)
+	if terr != nil {
+		return nil, terr
+	}
+	if p.TargetID == "" || p.Alias == "" {
+		return nil, &Error{Code: CodeInvalidParams, Message: "target_id and alias are required"}
+	}
+	if err := s.deps.Store.SetAlias(ctx, target, p.TargetID, p.Alias); err != nil {
+		return nil, internalErr(err)
+	}
+	return map[string]any{"set": true}, nil
+}
+
+func (s *Server) handleAliasRm(ctx context.Context, params json.RawMessage) (any, *Error) {
+	p, perr := decode[aliasParams](params)
+	if perr != nil {
+		return nil, perr
+	}
+	target, terr := aliasTarget(p.TargetType)
+	if terr != nil {
+		return nil, terr
+	}
+	if p.TargetID == "" {
+		return nil, &Error{Code: CodeInvalidParams, Message: "target_id is required"}
+	}
+	if err := s.deps.Store.RemoveAlias(ctx, target, p.TargetID); err != nil {
+		return nil, internalErr(err)
+	}
+	return map[string]any{"removed": true}, nil
+}
+
+type sendReactParams struct {
+	MessageID string `json:"message_id"`
+	Emoji     string `json:"emoji"`
+	Remove    bool   `json:"remove"`
+}
+
+// handleSendReact adds/removes a reaction. Reactions are low-risk phone
+// mutations initiated by a human keystroke in the TUI, so they respect the
+// send mode but skip the approval queue (documented in rpc-protocol.md).
+func (s *Server) handleSendReact(params json.RawMessage) (any, *Error) {
+	p, perr := decode[sendReactParams](params)
+	if perr != nil {
+		return nil, perr
+	}
+	if p.MessageID == "" || p.Emoji == "" {
+		return nil, &Error{Code: CodeInvalidParams, Message: "message_id and emoji are required"}
+	}
+	if s.deps.SendMode == SendOff {
+		return nil, &Error{Code: CodeSendsDisabled, Message: "daemon is read-only; restart with `gmcli --read-only=false serve`"}
+	}
+	if s.deps.Client == nil {
+		return nil, &Error{Code: CodeUnavailable, Message: "phone connection unavailable"}
+	}
+	action := gm.ReactionAdd
+	if p.Remove {
+		action = gm.ReactionRemove
+	}
+	s.liveMu.Lock()
+	err := s.deps.Client.SendReaction(p.MessageID, p.Emoji, action)
+	s.liveMu.Unlock()
+	if err != nil {
+		return nil, &Error{Code: CodeUnavailable, Message: err.Error()}
+	}
+	return map[string]any{"reacted": true, "emoji": p.Emoji}, nil
 }
 
 // refreshConversations bounds one sync.refresh pass: how many recent inbox

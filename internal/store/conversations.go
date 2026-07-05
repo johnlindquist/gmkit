@@ -14,6 +14,7 @@ type Conversation struct {
 	ID                string    `json:"conversation_id"`
 	SourcePlatform    string    `json:"source_platform"`
 	Name              string    `json:"name"`
+	Alias             string    `json:"alias,omitempty"` // local user label; overrides Name in display
 	IsGroup           bool      `json:"is_group"`
 	ParticipantsJSON  string    `json:"participants_json"`
 	LastMessageTimeMS int64     `json:"last_message_time_ms"`
@@ -61,10 +62,12 @@ func (s *Store) UpsertConversation(ctx context.Context, c Conversation) error {
 // GetConversation fetches a single row. Returns sql.ErrNoRows on miss.
 func (s *Store) GetConversation(ctx context.Context, id string) (Conversation, error) {
 	row := s.db.QueryRowContext(ctx, `
-		SELECT conversation_id, source_platform, name, is_group, participants_json,
-		       last_message_ts, unread, pinned, archived, updated_at
-		  FROM conversations
-		 WHERE conversation_id = ?
+		SELECT c.conversation_id, c.source_platform, c.name, c.is_group, c.participants_json,
+		       c.last_message_ts, c.unread, c.pinned, c.archived, c.updated_at,
+		       COALESCE(al.alias, '')
+		  FROM conversations c
+		  LEFT JOIN aliases al ON al.target_type = 'conversation' AND al.target_id = c.conversation_id
+		 WHERE c.conversation_id = ?
 	`, id)
 	return scanConversation(row)
 }
@@ -90,20 +93,22 @@ func (s *Store) ListConversations(ctx context.Context, opts ListConversationOpts
 		limit = 50
 	}
 	q := `
-		SELECT conversation_id, source_platform, name, is_group, participants_json,
-		       last_message_ts, unread, pinned, archived, updated_at
-		  FROM conversations`
+		SELECT c.conversation_id, c.source_platform, c.name, c.is_group, c.participants_json,
+		       c.last_message_ts, c.unread, c.pinned, c.archived, c.updated_at,
+		       COALESCE(al.alias, '')
+		  FROM conversations c
+		  LEFT JOIN aliases al ON al.target_type = 'conversation' AND al.target_id = c.conversation_id`
 	var clauses []string
 	if opts.UnreadOnly {
-		clauses = append(clauses, "unread = 1")
+		clauses = append(clauses, "c.unread = 1")
 	}
 	if opts.Pinned {
-		clauses = append(clauses, "pinned = 1")
+		clauses = append(clauses, "c.pinned = 1")
 	}
 	if len(clauses) > 0 {
 		q += " WHERE " + strings.Join(clauses, " AND ")
 	}
-	q += " ORDER BY last_message_ts DESC, updated_at DESC LIMIT ?"
+	q += " ORDER BY c.last_message_ts DESC, c.updated_at DESC LIMIT ?"
 	rows, err := s.db.QueryContext(ctx, q, limit)
 	if err != nil {
 		return nil, fmt.Errorf("list conversations: %w", err)
@@ -129,7 +134,7 @@ func scanConversation(r interface {
 	var lastMsg, updated, isGroup, unread, pinned, archived int64
 	if err := r.Scan(
 		&c.ID, &c.SourcePlatform, &c.Name, &isGroup, &c.ParticipantsJSON,
-		&lastMsg, &unread, &pinned, &archived, &updated,
+		&lastMsg, &unread, &pinned, &archived, &updated, &c.Alias,
 	); err != nil {
 		return Conversation{}, err
 	}

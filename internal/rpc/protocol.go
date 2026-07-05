@@ -85,6 +85,7 @@ const (
 	// After pair.success the daemon restarts itself to load the new
 	// session; clients reconnect and refetch.
 	EventPairQR      = "pair.qr"
+	EventPairEmoji   = "pair.emoji"
 	EventPairSuccess = "pair.success"
 	EventPairError   = "pair.error"
 )

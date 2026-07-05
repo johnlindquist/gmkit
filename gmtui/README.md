@@ -24,10 +24,13 @@ Google Messages session, the SQLite archive, and the send policy.
 gmtui          # that's it — pairing happens in the TUI too (press p)
 ```
 
-On first run (or when Google expires the pairing), press `p`: a QR code
-renders right in the terminal — scan it with Google Messages → Settings →
-Device pairing. The daemon restarts itself with the new session and
-everything syncs. (`gmcli auth` in a terminal still works if you prefer.)
+On first run (or when Google expires the pairing), press `p`. Google
+removed QR pairing from current Messages builds, so pairing uses your
+Google account: sign in to messages.google.com in a browser, copy any
+request as cURL from DevTools → Network, paste it into the overlay, and tap
+the emoji Google shows on your phone. The daemon restarts itself with the
+new session and everything syncs. (Older Messages builds can still use the
+QR flow via ctrl-r; `gmcli auth google` in a terminal also works.)
 
 If no daemon is listening, gmtui starts one automatically (`gmcli serve
 --auto`: sends gated by the approval queue, exits ~10 minutes after the last
@@ -89,8 +92,12 @@ under a supervisor.
 | `/` or `s`     | back to search from browse                              |
 | `j`/`k`, `tab` | move / switch pane in browse mode                       |
 | `i`            | compose to the selected conversation                    |
-| `p`            | pair / re-pair with your phone (QR in the terminal)     |
+| `p`            | pair / re-pair with your phone (in the terminal)        |
 | `b`            | backfill older messages for the open conversation      |
+| `o`            | download & open the selected message's attachment      |
+| `e`            | react to the selected message with an emoji            |
+| `n`            | rename the selected conversation (local alias)         |
+| `d`            | status & keys panel                                    |
 | `a`            | review pending agent send requests                      |
 | `y` / `n`      | approve (sends!) / deny the selected request            |
 | `r`            | refresh · `g`/`G` top/bottom · `q` quit (`ctrl-c` anywhere) |

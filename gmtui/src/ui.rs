@@ -42,45 +42,209 @@ pub fn render(frame: &mut Frame, app: &mut App) {
     if app.show_approvals {
         render_approvals(frame, app);
     }
+    if app.prompt.is_some() {
+        render_prompt(frame, app);
+    }
+    if app.show_doctor {
+        render_doctor(frame, app);
+    }
     if app.pairing.is_some() {
         render_pairing(frame, app);
     }
 }
 
-/// Full pairing flow as an overlay: QR code, instructions, outcome.
+/// One-line text prompt (alias, reaction) as a small centered overlay.
+fn render_prompt(frame: &mut Frame, app: &App) {
+    let Some(prompt) = app.prompt.as_ref() else {
+        return;
+    };
+    let area = frame.area();
+    let w = (prompt.title.len() as u16 + 6).clamp(50, area.width.saturating_sub(4));
+    let rect = Rect {
+        x: area.x + (area.width.saturating_sub(w)) / 2,
+        y: area.y + area.height / 2 - 2,
+        width: w,
+        height: 3,
+    };
+    frame.render_widget(Clear, rect);
+    let width = rect.width.saturating_sub(3) as usize;
+    let scroll = prompt.input.visual_scroll(width);
+    let p = Paragraph::new(prompt.input.value())
+        .scroll((0, scroll as u16))
+        .block(pane_block(&prompt.title, true));
+    frame.render_widget(p, rect);
+    let x = (prompt.input.visual_cursor().saturating_sub(scroll)) as u16;
+    frame.set_cursor_position((rect.x + 1 + x, rect.y + 1));
+}
+
+/// Diagnostics + key reference (the `doctor` of the TUI).
+fn render_doctor(frame: &mut Frame, app: &App) {
+    let s = &app.status;
+    let conn = if s.auth_expired {
+        "pairing expired (press p to re-pair)"
+    } else if s.connected {
+        "connected to phone relay"
+    } else if s.offline {
+        "offline archive (no phone)"
+    } else {
+        "phone relay down (auto-retrying)"
+    };
+    let lines: Vec<Line> = vec![
+        Line::raw(""),
+        Line::styled(
+            "  connection",
+            Style::default().fg(DIM).add_modifier(Modifier::BOLD),
+        ),
+        Line::raw(format!("    {conn}")),
+        Line::raw(format!("    send mode: {}", s.send_mode)),
+        Line::raw(format!(
+            "    archive: {} conversations · {} messages · {} pending approval(s)",
+            s.conversations, s.messages, s.pending_approvals
+        )),
+        Line::raw(format!(
+            "    last synced message: {}",
+            if s.last_event_ms > 0 {
+                format_ts(s.last_event_ms, now_ms()) + " ago"
+            } else {
+                "never".to_string()
+            }
+        )),
+        Line::raw(""),
+        Line::styled(
+            "  keys",
+            Style::default().fg(DIM).add_modifier(Modifier::BOLD),
+        ),
+        Line::raw("    /  search        i  compose        a  approvals    p  pair"),
+        Line::raw("    b  backfill      o  open media     e  react        n  rename"),
+        Line::raw("    r  refresh       d  this panel     q  quit"),
+        Line::raw(""),
+        Line::styled("  any key closes", Style::default().fg(DIM)),
+    ];
+    let area = frame.area();
+    let w = 74.min(area.width.saturating_sub(2));
+    let h = (lines.len() as u16 + 2).min(area.height.saturating_sub(2));
+    let rect = Rect {
+        x: area.x + (area.width.saturating_sub(w)) / 2,
+        y: area.y + (area.height.saturating_sub(h)) / 2,
+        width: w,
+        height: h,
+    };
+    frame.render_widget(Clear, rect);
+    frame.render_widget(
+        Paragraph::new(Text::from(lines)).block(pane_block("status & keys", true)),
+        rect,
+    );
+}
+
+/// Full pairing flow as an overlay. Google-account (cookies → emoji) is the
+/// primary path; legacy QR reachable via ctrl-r.
 fn render_pairing(frame: &mut Frame, app: &App) {
+    use crate::app::PairStage;
     let Some(pairing) = app.pairing.as_ref() else {
         return;
     };
     let mut lines: Vec<Line> = vec![Line::raw("")];
-    if let Some(qr) = &pairing.qr {
-        for row in qr.lines() {
-            lines.push(Line::from(Span::raw(format!("  {row}"))));
-        }
-        lines.push(Line::raw(""));
-    }
-    lines.push(Line::styled(
-        format!("  {}", pairing.message),
-        if pairing.failed {
-            Style::default().fg(Color::Red)
-        } else if pairing.succeeded {
-            Style::default().fg(ME).add_modifier(Modifier::BOLD)
-        } else {
-            Style::default().fg(WARN)
-        },
-    ));
-    if let Some(url) = &pairing.url {
-        if pairing.qr.is_some() {
+    let mut cursor: Option<(u16, u16)> = None; // offsets inside the overlay
+
+    match &pairing.stage {
+        PairStage::EnterCookies => {
+            lines.push(Line::styled(
+                "  Google removed QR pairing, so pairing uses your Google account:",
+                Style::default().fg(OTHER),
+            ));
+            lines.push(Line::raw(""));
+            lines.push(Line::raw(
+                "   1. Open messages.google.com in your browser and sign in",
+            ));
+            lines.push(Line::raw(
+                "   2. Open DevTools (cmd-opt-I) → Network tab → reload the page",
+            ));
+            lines.push(Line::raw(
+                "   3. Right-click any request → Copy → Copy as cURL",
+            ));
+            lines.push(Line::raw("   4. Paste below (cmd-v) and press enter"));
+            lines.push(Line::raw(""));
+            let width = 70usize;
+            let scroll = pairing.input.visual_scroll(width);
+            let shown: String = pairing
+                .input
+                .value()
+                .chars()
+                .skip(scroll)
+                .take(width)
+                .collect();
+            lines.push(Line::from(vec![
+                Span::styled("   ❯ ", Style::default().fg(ACCENT)),
+                Span::raw(shown),
+            ]));
+            cursor = Some((
+                5 + (pairing.input.visual_cursor().saturating_sub(scroll)) as u16,
+                lines.len() as u16,
+            ));
             lines.push(Line::raw(""));
             lines.push(Line::styled(
-                "  QR unreadable? Paste this URL into any QR generator:",
+                "  cookies stay on this machine (session.json, mode 0600)",
                 Style::default().fg(DIM),
             ));
-            lines.push(Line::styled(format!("  {url}"), Style::default().fg(DIM)));
+            if !pairing.message.is_empty() {
+                lines.push(Line::styled(
+                    format!("  {}", pairing.message),
+                    Style::default().fg(WARN),
+                ));
+            }
+            lines.push(Line::raw(""));
+            lines.push(Line::styled(
+                "  enter pair · ctrl-r legacy QR · esc close",
+                Style::default().fg(DIM),
+            ));
+        }
+        PairStage::Emoji(emoji) => {
+            lines.push(Line::styled(
+                format!("        {emoji}"),
+                Style::default().add_modifier(Modifier::BOLD),
+            ));
+            lines.push(Line::raw(""));
+            lines.push(Line::styled(
+                format!("  {}", pairing.message),
+                Style::default().fg(WARN),
+            ));
+            lines.push(Line::raw(""));
+            lines.push(Line::styled("  esc close", Style::default().fg(DIM)));
+        }
+        _ => {
+            if let Some(qr) = &pairing.qr {
+                for row in qr.lines() {
+                    lines.push(Line::from(Span::raw(format!("  {row}"))));
+                }
+                lines.push(Line::raw(""));
+            }
+            lines.push(Line::styled(
+                format!("  {}", pairing.message),
+                match pairing.stage {
+                    PairStage::Failed => Style::default().fg(Color::Red),
+                    PairStage::Succeeded => Style::default().fg(ME).add_modifier(Modifier::BOLD),
+                    _ => Style::default().fg(WARN),
+                },
+            ));
+            if let (Some(url), true) = (&pairing.url, pairing.qr.is_some()) {
+                lines.push(Line::raw(""));
+                lines.push(Line::styled(
+                    "  QR unreadable? Paste this URL into any QR generator:",
+                    Style::default().fg(DIM),
+                ));
+                lines.push(Line::styled(format!("  {url}"), Style::default().fg(DIM)));
+            }
+            lines.push(Line::raw(""));
+            lines.push(Line::styled(
+                if pairing.stage == PairStage::Failed {
+                    "  p retry · esc close"
+                } else {
+                    "  esc close"
+                },
+                Style::default().fg(DIM),
+            ));
         }
     }
-    lines.push(Line::raw(""));
-    lines.push(Line::styled("  esc close", Style::default().fg(DIM)));
 
     // Size the overlay to the QR (plus chrome), clamped to the terminal.
     let content_h = lines.len() as u16 + 2;
@@ -102,6 +266,9 @@ fn render_pairing(frame: &mut Frame, app: &App) {
     frame.render_widget(Clear, rect);
     let p = Paragraph::new(Text::from(lines)).block(pane_block("pair with Google Messages", true));
     frame.render_widget(p, rect);
+    if let Some((cx, cy)) = cursor {
+        frame.set_cursor_position((rect.x + cx, rect.y + cy));
+    }
 }
 
 // ---------------------------------------------------------------- omni
