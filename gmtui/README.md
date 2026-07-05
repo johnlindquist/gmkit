@@ -39,20 +39,30 @@ Flags: `--store <dir>` / `--socket <path>` to point at a non-default store,
 (`$XDG_STATE_HOME/gmcli/gmcli.sock`, falling back to
 `~/.local/state/gmcli/gmcli.sock`).
 
+## Search-first
+
+gmtui launches straight into search: just start typing. People and chats
+filter instantly (names, group titles, phone numbers — including contacts
+resolved server-side); full-text message hits stream in as you type,
+debounced against the daemon's FTS index. `Enter` opens a chat, or opens a
+message hit in its surrounding context. `Esc` drops into the classic
+two-pane browse layout; `/` gets you back to search from anywhere.
+
 ## Keys
 
-| Key       | Action                                             |
-| --------- | -------------------------------------------------- |
-| `j`/`k`   | move (arrows work too)                             |
-| `enter`   | open conversation / open search hit in context     |
-| `tab`     | switch pane                                        |
-| `/`       | full-text search across all messages (FTS5 syntax) |
-| `i`       | compose to the selected conversation               |
-| `a`       | review pending agent send requests                 |
-| `y` / `n` | approve (sends!) / deny the selected request       |
-| `r`       | refresh                                            |
-| `g`/`G`   | jump to top / bottom                               |
-| `q`       | quit                                               |
+| Key            | Action                                                  |
+| -------------- | ------------------------------------------------------- |
+| type           | search people, chats, and messages (launch screen)      |
+| `↑`/`↓`        | move through results while typing (`ctrl-j/k/n/p` too)  |
+| `enter`        | open conversation / open message hit in context         |
+| `ctrl-u`       | clear the search query                                  |
+| `esc`          | search → browse; messages → back where you came from    |
+| `/` or `s`     | back to search from browse                              |
+| `j`/`k`, `tab` | move / switch pane in browse mode                       |
+| `i`            | compose to the selected conversation                    |
+| `a`            | review pending agent send requests                      |
+| `y` / `n`      | approve (sends!) / deny the selected request            |
+| `r`            | refresh · `g`/`G` top/bottom · `q` quit (`ctrl-c` anywhere) |
 
 ## The approval queue
 

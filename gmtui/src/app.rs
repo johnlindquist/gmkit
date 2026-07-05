@@ -1,6 +1,12 @@
 //! Application state and update logic. All RPC work happens in spawned
 //! tasks that report back through the AppEvent channel — the update/draw
 //! loop never blocks on the network.
+//!
+//! The default experience is the omni search: gmtui launches into a query
+//! box over a unified people/chats/messages result list. Chats filter
+//! instantly from memory; message hits stream in from the daemon's FTS
+//! index, debounced by the tick loop and guarded by a generation counter so
+//! stale responses never clobber fresh ones.
 
 use crossterm::event::{Event as TermEvent, KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
 use ratatui::widgets::ListState;
@@ -20,7 +26,11 @@ pub enum AppEvent {
         conversation_id: String,
         messages: Vec<Message>,
     },
-    SearchHits(Vec<SearchHit>),
+    OmniResults {
+        generation: u64,
+        chats: Vec<Conversation>,
+        msgs: Vec<SearchHit>,
+    },
     Context {
         anchor: String,
         conversation_id: String,
@@ -34,23 +44,37 @@ pub enum AppEvent {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Focus {
+    /// The launch screen: live search over people, chats, and messages.
+    Omni,
     Chats,
     Messages,
-    Input,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum InputMode {
-    Search,
     Compose,
 }
 
-/// What the right-hand pane is showing.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum View {
-    Messages,
-    SearchResults,
+/// State for the omni search screen.
+#[derive(Default)]
+pub struct OmniState {
+    pub input: Input,
+    /// Query changed since the last dispatch; the tick loop debounces.
+    pub dirty: bool,
+    /// Monotonic id matching in-flight requests to the query that sent them.
+    pub generation: u64,
+    pub searching: bool,
+    pub chat_results: Vec<Conversation>,
+    pub msg_results: Vec<SearchHit>,
+    /// Index into the unified selectable list: chats first, then messages.
+    pub selected: usize,
+    pub list_state: ListState,
 }
+
+impl OmniState {
+    pub fn total(&self) -> usize {
+        self.chat_results.len() + self.msg_results.len()
+    }
+}
+
+/// How many chat rows the omni list shows at most.
+const OMNI_CHAT_LIMIT: usize = 50;
 
 pub struct App {
     rpc: RpcClient,
@@ -58,21 +82,19 @@ pub struct App {
     pub should_quit: bool,
 
     pub focus: Focus,
-    pub prev_focus: Focus,
-    pub input_mode: InputMode,
-    pub input: Input,
+    pub omni: OmniState,
+    pub compose_input: Input,
+    compose_return: Focus,
+    /// Where Esc from the messages pane goes back to.
+    messages_back: Focus,
 
     pub chats: Vec<Conversation>,
     pub chat_state: ListState,
 
-    pub view: View,
     pub current_chat: Option<String>,
     pub messages: Vec<Message>,
     pub msg_state: ListState,
     pub anchor_id: Option<String>,
-
-    pub search_hits: Vec<SearchHit>,
-    pub hit_state: ListState,
 
     pub show_approvals: bool,
     pub approvals: Vec<Approval>,
@@ -88,19 +110,17 @@ impl App {
             rpc,
             tx,
             should_quit: false,
-            focus: Focus::Chats,
-            prev_focus: Focus::Chats,
-            input_mode: InputMode::Search,
-            input: Input::default(),
+            focus: Focus::Omni,
+            omni: OmniState::default(),
+            compose_input: Input::default(),
+            compose_return: Focus::Omni,
+            messages_back: Focus::Omni,
             chats: Vec::new(),
             chat_state: ListState::default(),
-            view: View::Messages,
             current_chat: None,
             messages: Vec::new(),
             msg_state: ListState::default(),
             anchor_id: None,
-            search_hits: Vec::new(),
-            hit_state: ListState::default(),
             show_approvals: false,
             approvals: Vec::new(),
             approval_state: ListState::default(),
@@ -126,7 +146,7 @@ impl App {
     pub fn fetch_chats(&self) {
         let rpc = self.rpc.clone();
         self.spawn(async move {
-            match rpc.call_as("chats.list", json!({"limit": 200})).await {
+            match rpc.call_as("chats.list", json!({"limit": 500})).await {
                 Ok(chats) => Some(AppEvent::Chats(chats)),
                 Err(e) => Some(AppEvent::Flash(format!("chats: {e}"))),
             }
@@ -158,7 +178,6 @@ impl App {
 
     fn open_chat(&mut self, conversation_id: String) {
         self.current_chat = Some(conversation_id.clone());
-        self.view = View::Messages;
         self.anchor_id = None;
         let rpc = self.rpc.clone();
         self.spawn(async move {
@@ -182,19 +201,6 @@ impl App {
                     })
                 }
                 Err(e) => Some(AppEvent::Flash(format!("open chat: {e}"))),
-            }
-        });
-    }
-
-    fn run_search(&mut self, query: String) {
-        let rpc = self.rpc.clone();
-        self.spawn(async move {
-            match rpc
-                .call_as("messages.search", json!({"query": query, "limit": 100}))
-                .await
-            {
-                Ok(hits) => Some(AppEvent::SearchHits(hits)),
-                Err(e) => Some(AppEvent::Flash(format!("search: {e}"))),
             }
         });
     }
@@ -293,6 +299,97 @@ impl App {
         self.flash = Some((msg.into(), now_ms()));
     }
 
+    // ---- omni search ----------------------------------------------------
+
+    /// Instant, in-memory filter over the loaded chat list. Matches display
+    /// names, participant names, and phone numbers. Empty query = recent
+    /// chats, so the launch screen doubles as a recents picker.
+    fn local_chat_matches(&self, query: &str) -> Vec<Conversation> {
+        if query.is_empty() {
+            return self.chats.iter().take(OMNI_CHAT_LIMIT).cloned().collect();
+        }
+        let q = query.to_lowercase();
+        self.chats
+            .iter()
+            .filter(|c| {
+                c.display_name().to_lowercase().contains(&q)
+                    || c.participants().into_iter().any(|p| {
+                        p.name.to_lowercase().contains(&q) || (!q.is_empty() && p.e164.contains(&q))
+                    })
+            })
+            .take(OMNI_CHAT_LIMIT)
+            .cloned()
+            .collect()
+    }
+
+    /// Re-filter chats immediately after a keystroke and mark the query
+    /// dirty so the tick loop dispatches the remote search.
+    fn refresh_omni_local(&mut self) {
+        let query = self.omni.input.value().trim().to_string();
+        self.omni.chat_results = self.local_chat_matches(&query);
+        if query.chars().count() < 3 {
+            // Below the trigram minimum nothing can match server-side.
+            self.omni.msg_results.clear();
+            self.omni.searching = false;
+        }
+        self.omni.selected = 0;
+        self.omni.dirty = true;
+    }
+
+    /// Fire the remote search for the current query. Called from the tick
+    /// loop (~250ms cadence), which is the debounce.
+    fn dispatch_omni_search(&mut self) {
+        let query = self.omni.input.value().trim().to_string();
+        self.omni.generation += 1;
+        let generation = self.omni.generation;
+        if query.chars().count() < 2 {
+            return; // local filter already covers this
+        }
+        self.omni.searching = true;
+        let rpc = self.rpc.clone();
+        let want_messages = query.chars().count() >= 3;
+        self.spawn(async move {
+            // Errors here are non-fatal (mid-typing): keep prior results.
+            let chats: Vec<Conversation> = rpc
+                .call_as("chats.find", json!({"query": query, "limit": 20}))
+                .await
+                .unwrap_or_default();
+            let msgs: Vec<SearchHit> = if want_messages {
+                rpc.call_as("messages.search", json!({"query": query, "limit": 50}))
+                    .await
+                    .unwrap_or_default()
+            } else {
+                Vec::new()
+            };
+            Some(AppEvent::OmniResults {
+                generation,
+                chats,
+                msgs,
+            })
+        });
+    }
+
+    fn omni_activate(&mut self) {
+        let nchats = self.omni.chat_results.len();
+        if self.omni.selected < nchats {
+            if let Some(c) = self.omni.chat_results.get(self.omni.selected) {
+                let id = c.conversation_id.clone();
+                self.open_chat(id);
+                self.messages_back = Focus::Omni;
+                self.focus = Focus::Messages;
+            }
+        } else if let Some(hit) = self.omni.msg_results.get(self.omni.selected - nchats) {
+            self.open_context(hit.clone());
+            self.messages_back = Focus::Omni;
+            self.focus = Focus::Messages;
+        }
+    }
+
+    pub fn enter_omni(&mut self) {
+        self.focus = Focus::Omni;
+        self.refresh_omni_local();
+    }
+
     // ---- event handling -------------------------------------------------
 
     pub fn on_tick(&mut self) {
@@ -300,6 +397,10 @@ impl App {
             if now_ms() - at > 5000 {
                 self.flash = None;
             }
+        }
+        if self.omni.dirty {
+            self.omni.dirty = false;
+            self.dispatch_omni_search();
         }
     }
 
@@ -311,6 +412,10 @@ impl App {
                 if self.chat_state.selected().is_none() && !self.chats.is_empty() {
                     self.chat_state.select(Some(0));
                 }
+                // Keep the launch screen's recents fresh.
+                if self.focus == Focus::Omni && self.omni.input.value().trim().is_empty() {
+                    self.omni.chat_results = self.local_chat_matches("");
+                }
             }
             AppEvent::Messages {
                 conversation_id,
@@ -318,21 +423,39 @@ impl App {
             } => {
                 if self.current_chat.as_deref() == Some(conversation_id.as_str()) {
                     self.messages = messages;
-                    self.view = View::Messages;
                     self.select_message_anchor();
                 }
             }
-            AppEvent::SearchHits(hits) => {
-                self.search_hits = hits;
-                self.view = View::SearchResults;
-                self.focus = Focus::Messages;
-                self.hit_state.select(if self.search_hits.is_empty() {
-                    None
-                } else {
-                    Some(0)
-                });
-                if self.search_hits.is_empty() {
-                    self.flash("no matches");
+            AppEvent::OmniResults {
+                generation,
+                chats,
+                msgs,
+            } => {
+                if generation != self.omni.generation {
+                    return; // stale response from an older keystroke
+                }
+                self.omni.searching = false;
+                // Server-side matches (contacts, aliases, numbers) that the
+                // in-memory filter missed go after the local hits.
+                for conv in chats {
+                    if self.omni.chat_results.len() >= OMNI_CHAT_LIMIT {
+                        break;
+                    }
+                    if !self
+                        .omni
+                        .chat_results
+                        .iter()
+                        .any(|c| c.conversation_id == conv.conversation_id)
+                    {
+                        self.omni.chat_results.push(conv);
+                    }
+                }
+                self.omni.msg_results = msgs;
+                let total = self.omni.total();
+                if total == 0 {
+                    self.omni.selected = 0;
+                } else if self.omni.selected >= total {
+                    self.omni.selected = total - 1;
                 }
             }
             AppEvent::Context {
@@ -343,7 +466,6 @@ impl App {
                 self.current_chat = Some(conversation_id);
                 self.messages = messages;
                 self.anchor_id = Some(anchor);
-                self.view = View::Messages;
                 self.focus = Focus::Messages;
                 self.select_message_anchor();
             }
@@ -536,9 +658,68 @@ impl App {
                 return;
             }
             match self.focus {
-                Focus::Input => self.handle_input_key(key, ev),
+                Focus::Omni => self.handle_omni_key(key, ev),
+                Focus::Compose => self.handle_compose_key(key, ev),
                 Focus::Chats => self.handle_chats_key(key),
                 Focus::Messages => self.handle_messages_key(key),
+            }
+        }
+    }
+
+    fn handle_omni_key(&mut self, key: KeyEvent, raw: TermEvent) {
+        let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
+        match key.code {
+            KeyCode::Esc | KeyCode::Tab => self.focus = Focus::Chats,
+            KeyCode::Enter => self.omni_activate(),
+            KeyCode::Down => self.omni_move(1),
+            KeyCode::Up => self.omni_move(-1),
+            KeyCode::Char('n') if ctrl => self.omni_move(1),
+            KeyCode::Char('p') if ctrl => self.omni_move(-1),
+            KeyCode::Char('j') if ctrl => self.omni_move(1),
+            KeyCode::Char('k') if ctrl => self.omni_move(-1),
+            KeyCode::PageDown => self.omni_move(10),
+            KeyCode::PageUp => self.omni_move(-10),
+            _ => {
+                let before = self.omni.input.value().to_string();
+                self.omni.input.handle_event(&raw);
+                if self.omni.input.value() != before {
+                    self.refresh_omni_local();
+                }
+            }
+        }
+    }
+
+    fn omni_move(&mut self, delta: i64) {
+        let total = self.omni.total();
+        if total == 0 {
+            self.omni.selected = 0;
+            return;
+        }
+        let cur = self.omni.selected as i64;
+        self.omni.selected = (cur + delta).clamp(0, total as i64 - 1) as usize;
+    }
+
+    fn handle_compose_key(&mut self, key: KeyEvent, raw: TermEvent) {
+        match key.code {
+            KeyCode::Esc => {
+                self.compose_input.reset();
+                self.focus = self.compose_return;
+            }
+            KeyCode::Enter => {
+                let value = self.compose_input.value().trim().to_string();
+                self.compose_input.reset();
+                self.focus = self.compose_return;
+                if value.is_empty() {
+                    return;
+                }
+                if let Some(chat) = self.current_chat.clone() {
+                    self.send_message(chat, value);
+                } else {
+                    self.flash("no conversation selected");
+                }
+            }
+            _ => {
+                self.compose_input.handle_event(&raw);
             }
         }
     }
@@ -577,36 +758,6 @@ impl App {
         }
     }
 
-    fn handle_input_key(&mut self, key: KeyEvent, raw: TermEvent) {
-        match key.code {
-            KeyCode::Esc => {
-                self.input.reset();
-                self.focus = self.prev_focus;
-            }
-            KeyCode::Enter => {
-                let value = self.input.value().trim().to_string();
-                self.input.reset();
-                self.focus = self.prev_focus;
-                if value.is_empty() {
-                    return;
-                }
-                match self.input_mode {
-                    InputMode::Search => self.run_search(value),
-                    InputMode::Compose => {
-                        if let Some(chat) = self.current_chat.clone() {
-                            self.send_message(chat, value);
-                        } else {
-                            self.flash("no conversation selected");
-                        }
-                    }
-                }
-            }
-            _ => {
-                self.input.handle_event(&raw);
-            }
-        }
-    }
-
     fn handle_chats_key(&mut self, key: KeyEvent) {
         match key.code {
             KeyCode::Char('q') => self.should_quit = true,
@@ -621,11 +772,12 @@ impl App {
                 if let Some(c) = self.chat_state.selected().and_then(|i| self.chats.get(i)) {
                     let id = c.conversation_id.clone();
                     self.open_chat(id);
+                    self.messages_back = Focus::Chats;
                     self.focus = Focus::Messages;
                 }
             }
             KeyCode::Tab => self.focus = Focus::Messages,
-            KeyCode::Char('/') => self.enter_input(InputMode::Search),
+            KeyCode::Char('/') | KeyCode::Char('s') => self.enter_omni(),
             KeyCode::Char('i') => {
                 // Compose to the selected chat, opening it first if needed.
                 if let Some(c) = self.chat_state.selected().and_then(|i| self.chats.get(i)) {
@@ -633,7 +785,7 @@ impl App {
                     if self.current_chat.as_deref() != Some(id.as_str()) {
                         self.open_chat(id);
                     }
-                    self.enter_input(InputMode::Compose);
+                    self.enter_compose(Focus::Chats);
                 }
             }
             KeyCode::Char('a') => {
@@ -650,37 +802,15 @@ impl App {
     }
 
     fn handle_messages_key(&mut self, key: KeyEvent) {
-        if self.view == View::SearchResults {
-            match key.code {
-                KeyCode::Char('q') => self.should_quit = true,
-                KeyCode::Esc | KeyCode::Char('h') => {
-                    self.view = View::Messages;
-                    self.focus = Focus::Chats;
-                }
-                KeyCode::Char('j') | KeyCode::Down => {
-                    list_next(&mut self.hit_state, self.search_hits.len())
-                }
-                KeyCode::Char('k') | KeyCode::Up => {
-                    list_prev(&mut self.hit_state, self.search_hits.len())
-                }
-                KeyCode::Enter => {
-                    if let Some(hit) = self
-                        .hit_state
-                        .selected()
-                        .and_then(|i| self.search_hits.get(i))
-                    {
-                        self.open_context(hit.clone());
-                    }
-                }
-                KeyCode::Char('/') => self.enter_input(InputMode::Search),
-                KeyCode::Tab => self.focus = Focus::Chats,
-                _ => {}
-            }
-            return;
-        }
         match key.code {
             KeyCode::Char('q') => self.should_quit = true,
-            KeyCode::Esc | KeyCode::Char('h') | KeyCode::Tab => self.focus = Focus::Chats,
+            KeyCode::Esc | KeyCode::Char('h') => {
+                self.focus = self.messages_back;
+                if self.focus == Focus::Omni {
+                    self.enter_omni();
+                }
+            }
+            KeyCode::Tab => self.focus = Focus::Chats,
             KeyCode::Char('j') | KeyCode::Down => {
                 list_next(&mut self.msg_state, self.messages.len())
             }
@@ -693,10 +823,10 @@ impl App {
             KeyCode::Char('G') => self.msg_state.select(self.messages.len().checked_sub(1)),
             KeyCode::Char('i') => {
                 if self.current_chat.is_some() {
-                    self.enter_input(InputMode::Compose);
+                    self.enter_compose(Focus::Messages);
                 }
             }
-            KeyCode::Char('/') => self.enter_input(InputMode::Search),
+            KeyCode::Char('/') | KeyCode::Char('s') => self.enter_omni(),
             KeyCode::Char('a') => {
                 self.show_approvals = true;
                 self.fetch_approvals();
@@ -710,11 +840,10 @@ impl App {
         }
     }
 
-    fn enter_input(&mut self, mode: InputMode) {
-        self.prev_focus = self.focus;
-        self.input_mode = mode;
-        self.input.reset();
-        self.focus = Focus::Input;
+    fn enter_compose(&mut self, back: Focus) {
+        self.compose_return = back;
+        self.compose_input.reset();
+        self.focus = Focus::Compose;
     }
 }
 
