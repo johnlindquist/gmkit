@@ -30,7 +30,8 @@ else
   REPO_DIR=$(mktemp -d "${TMPDIR:-/tmp}/gmkit.XXXXXX")
   trap 'rm -rf "$REPO_DIR"' EXIT
   info "Cloning $REPO_URL ..."
-  git clone --depth 1 "$REPO_URL" "$REPO_DIR"
+  # Full clone so `git describe --tags` can stamp a real version.
+  git clone "$REPO_URL" "$REPO_DIR"
 fi
 
 VERSION=$(git -C "$REPO_DIR" describe --tags --always --dirty 2>/dev/null || echo "dev")
