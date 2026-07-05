@@ -604,7 +604,12 @@ fn render_compose(frame: &mut Frame, app: &App, area: Rect) {
 }
 
 fn render_status(frame: &mut Frame, app: &App, area: Rect) {
-    let conn = if app.daemon_lost {
+    let conn = if app.status.auth_expired {
+        Span::styled(
+            "✖ pairing expired — run `gmcli auth` in a terminal, then relaunch gmtui",
+            Style::default().fg(Color::Red).add_modifier(Modifier::BOLD),
+        )
+    } else if app.daemon_lost {
         Span::styled(
             "○ daemon lost — restarting it now…",
             Style::default().fg(WARN).add_modifier(Modifier::BOLD),

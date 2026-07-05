@@ -46,7 +46,8 @@ Read methods (always available):
 | Method             | Params                                                              | Result |
 | ------------------ | ------------------------------------------------------------------- | ------ |
 | `ping`             | —                                                                   | `{pong, version, schema_version}` |
-| `status`           | —                                                                   | `{connected, offline, send_mode, pending_approvals, conversations, messages, last_event_ms, last_connect_ms, updated_at_ms}` — `offline` = daemon deliberately has no phone connection |
+| `status`           | —                                                                   | `{connected, offline, auth_expired, send_mode, pending_approvals, conversations, messages, last_event_ms, last_connect_ms, updated_at_ms}` — `offline` = deliberately no phone connection; `auth_expired` = phone reports the pairing logged out (`gmcli auth` required; daemon keeps serving the archive) |
+| `daemon.shutdown`  | —                                                                   | `{shutting_down: true}`; the daemon exits. Used by `gmcli auth` to hand over a fresh session — on-demand clients spawn a replacement. |
 | `subscribe`        | —                                                                   | `{subscribed: true}`; events start flowing on this connection |
 | `chats.list`       | `{limit?, unread_only?, pinned?}`                                   | array of conversations |
 | `chats.find`       | `{query, limit?}` — person/group/number fragment                    | array of conversations, matched on name, alias, participants, and contacts |

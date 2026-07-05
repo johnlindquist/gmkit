@@ -748,6 +748,7 @@ impl App {
                 match state {
                     "ready" | "listen_recovered" | "phone_responding" => {
                         self.status.connected = true;
+                        self.status.auth_expired = false;
                     }
                     "refreshed" => {
                         // The daemon just imported fresh data outside the
@@ -769,7 +770,7 @@ impl App {
                     }
                     "logged_out" => {
                         self.status.connected = false;
-                        self.flash("logged out — re-run `gmcli auth`");
+                        self.status.auth_expired = true;
                     }
                     _ => {}
                 }

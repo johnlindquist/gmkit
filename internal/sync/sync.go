@@ -9,6 +9,7 @@ package sync
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strings"
 	"time"
@@ -21,6 +22,11 @@ import (
 
 	"github.com/johnlindquist/gmkit/internal/store"
 )
+
+// ErrLoggedOut signals that the phone no longer recognizes this pairing.
+// Consumers should stop hammering the relay and direct the user to
+// `gmcli auth` instead of treating it as a transient failure.
+var ErrLoggedOut = errors.New("phone reports logged-out state; re-run `gmcli auth`")
 
 // Pump owns the conversion of libgm events into store writes.
 type Pump struct {
@@ -60,9 +66,8 @@ func (p *Pump) Handle(evt any) {
 	case *events.PhoneRespondingAgain:
 		p.logger.Info().Msg("Phone responding again")
 	case *events.GaiaLoggedOut:
-		err := fmt.Errorf("phone reports logged-out state; re-run `gmcli auth`")
-		p.logger.Error().Err(err).Msg("libgm auth fatal error")
-		p.fail(err)
+		p.logger.Error().Err(ErrLoggedOut).Msg("libgm auth fatal error")
+		p.fail(ErrLoggedOut)
 	case *events.ListenFatalError:
 		err := fmt.Errorf("libgm listen fatal error: %w", e.Error)
 		p.logger.Error().Err(e.Error).Msg("libgm listen fatal error")

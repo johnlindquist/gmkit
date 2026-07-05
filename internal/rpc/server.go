@@ -65,7 +65,27 @@ type Server struct {
 
 	refreshMu   sync.Mutex
 	lastRefresh time.Time
+
+	// authExpired: the phone reported this pairing logged out. Set from
+	// GaiaLoggedOut, cleared when a session comes up again. Surfaced in
+	// status so clients can show a sticky "run gmcli auth" banner.
+	authExpired atomic.Bool
+
+	shutdown     chan struct{}
+	shutdownOnce sync.Once
 }
+
+// ShutdownRequested fires when a client asked the daemon to exit
+// (daemon.shutdown — used by `gmcli auth` to hand over a fresh session).
+func (s *Server) ShutdownRequested() <-chan struct{} { return s.shutdown }
+
+func (s *Server) requestShutdown() {
+	s.shutdownOnce.Do(func() { close(s.shutdown) })
+}
+
+// MarkAuthExpired flags the pairing as dead (also broadcast as a
+// sync.status logged_out event by HandleGMEvent).
+func (s *Server) MarkAuthExpired() { s.authExpired.Store(true) }
 
 // NewServer builds a Server around deps.
 func NewServer(deps Deps) *Server {
@@ -75,7 +95,7 @@ func NewServer(deps Deps) *Server {
 	if deps.LiveTimeout == 0 {
 		deps.LiveTimeout = defaultLiveTimeout
 	}
-	s := &Server{deps: deps, conns: make(map[*serverConn]struct{})}
+	s := &Server{deps: deps, conns: make(map[*serverConn]struct{}), shutdown: make(chan struct{})}
 	if deps.IdleExit > 0 {
 		s.idle = make(chan struct{})
 		s.armIdleTimer()
@@ -182,6 +202,7 @@ func (s *Server) HandleGMEvent(evt any) {
 			s.Broadcast(EventConversationUpdated, map[string]any{"conversation": row})
 		}
 	case *events.ClientReady:
+		s.authExpired.Store(false)
 		s.Broadcast(EventSyncStatus, map[string]any{"state": "ready"})
 	case *events.PhoneNotResponding:
 		s.Broadcast(EventSyncStatus, map[string]any{"state": "phone_not_responding"})
@@ -192,6 +213,7 @@ func (s *Server) HandleGMEvent(evt any) {
 	case *events.ListenRecovered:
 		s.Broadcast(EventSyncStatus, map[string]any{"state": "listen_recovered"})
 	case *events.GaiaLoggedOut:
+		s.authExpired.Store(true)
 		s.Broadcast(EventSyncStatus, map[string]any{"state": "logged_out"})
 	}
 }

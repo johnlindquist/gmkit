@@ -2,6 +2,7 @@ package cmd
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"time"
@@ -149,11 +150,27 @@ func serveCmd() *cobra.Command {
 					fmt.Fprintln(os.Stderr, "Shutting down...")
 					return nil
 				case err := <-pumpFatal:
+					if errors.Is(err, gmsync.ErrLoggedOut) {
+						// Pairing expired. Exiting here would just make
+						// on-demand clients respawn us into the same wall —
+						// a crashloop that hammers Google. Stay up, stop
+						// talking to the phone, and serve the archive with
+						// an auth_expired status until the user re-pairs.
+						logger.Warn().Msg("Pairing expired — phone reports logged out. Serving archive only; run `gmcli auth` to re-pair.")
+						server.MarkAuthExpired()
+						server.Broadcast(rpc.EventSyncStatus, map[string]any{"state": "logged_out"})
+						client.Disconnect()
+						pumpFatal = nil // stop selecting on further fatals
+						continue
+					}
 					return err
 				case err := <-serveErr:
 					if err != nil {
 						return fmt.Errorf("rpc server: %w", err)
 					}
+					return nil
+				case <-server.ShutdownRequested():
+					fmt.Fprintln(os.Stderr, "Shutdown requested (new session pairing); exiting.")
 					return nil
 				case <-server.Idle():
 					fmt.Fprintf(os.Stderr, "No clients for %s; exiting (auto mode).\n", idleExit)

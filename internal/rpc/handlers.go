@@ -42,6 +42,11 @@ func (s *Server) dispatch(ctx context.Context, c *serverConn, method string, par
 		return s.handleContactsShow(ctx, params)
 	case "sync.refresh":
 		return s.handleSyncRefresh(ctx)
+	case "daemon.shutdown":
+		// Used by `gmcli auth` after re-pairing: the daemon must restart to
+		// load the new session; on-demand clients spawn a fresh one.
+		s.requestShutdown()
+		return map[string]any{"shutting_down": true}, nil
 	case "history.backfill":
 		return s.handleHistoryBackfill(ctx, params)
 	case "history.lookup":
@@ -104,6 +109,7 @@ func (s *Server) handleStatus(ctx context.Context) (any, *Error) {
 	return map[string]any{
 		"connected":         connected,
 		"offline":           s.deps.Client == nil,
+		"auth_expired":      s.authExpired.Load(),
 		"send_mode":         s.deps.SendMode,
 		"pending_approvals": len(pending),
 		"conversations":     conversations,

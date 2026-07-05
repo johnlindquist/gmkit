@@ -38,6 +38,10 @@ func authGoogleCmd() *cobra.Command {
 			ctx, cancel := signalContext(cmd.Context())
 			defer cancel()
 
+			// A running daemon holds the old session; stop it so the next
+			// client auto-starts a fresh daemon with the new pairing.
+			stopRunningDaemon(ctx, layout.Socket)
+
 			fmt.Fprintln(os.Stderr, "Starting Google account pairing...")
 			res, err := gm.PairGoogle(ctx, layout, logger, cookies, func(emoji string) {
 				fmt.Fprintf(os.Stderr, "On your phone, tap this emoji in Google Messages: %s\n", emoji)

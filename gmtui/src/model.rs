@@ -139,6 +139,9 @@ pub struct DaemonStatus {
     /// Daemon deliberately running without a phone connection (--offline).
     #[serde(default)]
     pub offline: bool,
+    /// The phone reported this pairing logged out; `gmcli auth` required.
+    #[serde(default)]
+    pub auth_expired: bool,
     #[serde(default)]
     pub send_mode: String,
     #[serde(default)]

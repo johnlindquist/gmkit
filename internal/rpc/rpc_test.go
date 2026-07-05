@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/rs/zerolog"
+	"go.mau.fi/mautrix-gmessages/pkg/libgm/events"
 
 	"github.com/johnlindquist/gmkit/internal/store"
 )
@@ -403,5 +404,43 @@ func TestChatsFindAndRichSearch(t *testing.T) {
 	}
 	if len(hits) != 1 || hits[0].SenderName != "Zelda" || hits[0].ConversationName != "Zelda" {
 		t.Fatalf("rich hits: %+v", hits)
+	}
+}
+
+func TestAuthExpiredStatusAndShutdown(t *testing.T) {
+	client, _, srv := startTestServer(t, SendOff)
+	if err := client.Subscribe(callCtx(t)); err != nil {
+		t.Fatalf("subscribe: %v", err)
+	}
+
+	srv.HandleGMEvent(&events.GaiaLoggedOut{})
+
+	var status struct {
+		AuthExpired bool `json:"auth_expired"`
+	}
+	if err := client.Call(callCtx(t), "status", nil, &status); err != nil {
+		t.Fatalf("status: %v", err)
+	}
+	if !status.AuthExpired {
+		t.Fatal("auth_expired should be true after GaiaLoggedOut")
+	}
+
+	// A fresh session clears the flag.
+	srv.HandleGMEvent(&events.ClientReady{})
+	if err := client.Call(callCtx(t), "status", nil, &status); err != nil {
+		t.Fatalf("status: %v", err)
+	}
+	if status.AuthExpired {
+		t.Fatal("auth_expired should clear on ClientReady")
+	}
+
+	// daemon.shutdown fires the shutdown signal.
+	if err := client.Call(callCtx(t), "daemon.shutdown", nil, nil); err != nil {
+		t.Fatalf("daemon.shutdown: %v", err)
+	}
+	select {
+	case <-srv.ShutdownRequested():
+	case <-time.After(2 * time.Second):
+		t.Fatal("shutdown never signaled")
 	}
 }
