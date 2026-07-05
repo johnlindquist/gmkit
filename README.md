@@ -62,22 +62,16 @@ roughly every 14 days of inactivity (Google's policy, not ours).
 
 ## Install
 
-Quickest path (requires Go 1.24+; Rust optional, for the gmtui terminal UI):
+No toolchains needed — the installer downloads prebuilt binaries (macOS and
+Linux, arm64 and x86_64) from GitHub Releases:
 
 ```sh
 curl -fsSL https://raw.githubusercontent.com/johnlindquist/gmkit/main/install.sh | bash
 ```
 
-Or from a clone:
-
-```sh
-git clone https://github.com/johnlindquist/gmkit
-cd gmkit
-./install.sh
-```
-
-The script installs `gmcli` into your Go bin dir and `gmtui` via cargo
-(skipped with a hint if Rust isn't installed). Manual equivalents:
+Or from a clone: `./install.sh`. Binaries land in `~/.local/bin` (override
+with `GMKIT_BIN_DIR`). To build from source instead, pass `--source`
+(requires Go 1.24+; Rust optional, for gmtui). Manual equivalents:
 
 ```sh
 go install github.com/johnlindquist/gmkit/cmd/gmcli@latest

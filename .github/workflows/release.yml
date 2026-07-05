@@ -1,0 +1,55 @@
+name: release
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+
+jobs:
+  # gmcli: pure-Go, cross-compiled for all targets from one runner.
+  gmcli:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - uses: goreleaser/goreleaser-action@v6
+        with:
+          version: "~> v2"
+          args: release --clean
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  # gmtui: Rust needs a native runner per target.
+  gmtui:
+    needs: gmcli # goreleaser creates the release; these jobs attach to it
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: macos-14
+            target: darwin_arm64
+          - os: macos-13
+            target: darwin_amd64
+          - os: ubuntu-latest
+            target: linux_amd64
+          - os: ubuntu-24.04-arm
+            target: linux_arm64
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Build gmtui
+        working-directory: gmtui
+        run: cargo build --release --locked
+      - name: Upload to release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          tar -C gmtui/target/release -czf "gmtui_${{ matrix.target }}.tar.gz" gmtui
+          gh release upload "$GITHUB_REF_NAME" "gmtui_${{ matrix.target }}.tar.gz" --clobber

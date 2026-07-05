@@ -1,0 +1,37 @@
+# goreleaser config for gmcli (the Go binary). gmtui (Rust) is built and
+# attached to the same release by .github/workflows/release.yml.
+version: 2
+project_name: gmkit
+
+builds:
+  - id: gmcli
+    main: ./cmd/gmcli
+    binary: gmcli
+    env:
+      - CGO_ENABLED=0 # pure-Go deps (modernc.org/sqlite, libgm): static binaries
+    goos:
+      - linux
+      - darwin
+    goarch:
+      - amd64
+      - arm64
+    ldflags:
+      - -s -w -X github.com/johnlindquist/gmkit/internal/cmd.Version=v{{.Version}}
+
+archives:
+  - ids: [gmcli]
+    formats: [tar.gz]
+    name_template: "gmcli_{{ .Os }}_{{ .Arch }}"
+    files:
+      - LICENSE
+      - NOTICE
+
+checksum:
+  name_template: checksums.txt
+
+changelog:
+  use: github
+  filters:
+    exclude:
+      - "^docs:"
+      - "^chore:"

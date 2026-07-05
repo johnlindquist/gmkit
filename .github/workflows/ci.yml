@@ -31,3 +31,27 @@ jobs:
 
       - name: Vet
         run: go vet ./...
+
+  gmtui:
+    name: Rust build (gmtui)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+
+      - name: Format
+        working-directory: gmtui
+        run: cargo fmt --check
+
+      - name: Clippy
+        working-directory: gmtui
+        run: cargo clippy --locked -- -D warnings
+
+      - name: Build
+        working-directory: gmtui
+        run: cargo build --locked
