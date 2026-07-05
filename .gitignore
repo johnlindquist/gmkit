@@ -14,3 +14,9 @@ session.json
 .idea/
 .vscode/
 .DS_Store
+
+# Local-only scratch (not part of the project)
+/.antigravitycli/
+/memories/
+/mindy.sh
+/scripts/

@@ -1,7 +1,7 @@
 package store
 
 // schemaVersion is the migration target. Bump when migrations[] grows.
-const schemaVersion = 2
+const schemaVersion = 3
 
 // migrations are applied in order. Each runs in its own transaction; the
 // store records the highest applied version in the schema_version table.
@@ -128,5 +128,29 @@ var migrations = []string{
 	) STRICT;
 
 	INSERT INTO schema_version (version) VALUES (2);
+	`,
+	// v3: pending-send approval queue. Agents (MCP clients, RPC clients,
+	// scripts) propose outgoing messages as approval rows; a human resolves
+	// them (TUI, `gmcli approvals`). The daemon performs the actual send on
+	// approval. Rows are local-only and never touch the phone until approved.
+	`
+	CREATE TABLE approvals (
+		approval_id     TEXT PRIMARY KEY,
+		conversation_id TEXT NOT NULL,
+		body            TEXT NOT NULL,
+		reply_to_id     TEXT,
+		requested_by    TEXT NOT NULL DEFAULT '',
+		status          TEXT NOT NULL DEFAULT 'pending'
+		                CHECK (status IN ('pending','sent','failed','denied','canceled')),
+		error           TEXT,
+		message_id      TEXT,
+		created_at      INTEGER NOT NULL,
+		updated_at      INTEGER NOT NULL
+	) STRICT;
+
+	CREATE INDEX ix_approvals_status_created
+		ON approvals (status, created_at DESC);
+
+	INSERT INTO schema_version (version) VALUES (3);
 	`,
 }

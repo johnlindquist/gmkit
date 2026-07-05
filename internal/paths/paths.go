@@ -13,6 +13,7 @@ type Layout struct {
 	Session  string // session.json (libgm AuthData)
 	Database string // gmcli.db (SQLite + FTS5)
 	MediaDir string // media/ (downloaded attachment cache)
+	Socket   string // gmcli.sock (`gmcli serve` unix socket)
 }
 
 // Resolve returns the layout rooted at storeOverride if non-empty, otherwise
@@ -38,7 +39,13 @@ func Resolve(storeOverride string) (Layout, error) {
 		Session:  filepath.Join(abs, "session.json"),
 		Database: filepath.Join(abs, "gmcli.db"),
 		MediaDir: filepath.Join(abs, "media"),
+		Socket:   filepath.Join(abs, "gmcli.sock"),
 	}, nil
+}
+
+// DaemonLog is where auto-started daemons write their output.
+func (l Layout) DaemonLog() string {
+	return filepath.Join(l.Root, "daemon.log")
 }
 
 // EnsureDirs creates the store root and media subdirectory with 0700.

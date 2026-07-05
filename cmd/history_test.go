@@ -4,10 +4,12 @@ import (
 	"encoding/json"
 	"strings"
 	"testing"
+
+	"github.com/fdsouvenir/gmcli/internal/history"
 )
 
 func TestHistoryBackfillResultJSONIsUnambiguous(t *testing.T) {
-	res := historyBackfillResult{
+	res := history.BackfillResult{
 		ConversationID:       "198",
 		Requests:             2,
 		Count:                100,

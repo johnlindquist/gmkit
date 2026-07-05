@@ -6,6 +6,7 @@ import (
 	"os"
 	"time"
 
+	"github.com/rs/zerolog"
 	"github.com/spf13/cobra"
 	"go.mau.fi/mautrix-gmessages/pkg/libgm/gmproto"
 
@@ -55,31 +56,7 @@ func syncCmd() *cobra.Command {
 			}
 			defer client.Disconnect()
 
-			if resp, err := client.Underlying().ListContacts(); err != nil {
-				logger.Warn().Err(err).Msg("Contact import failed")
-			} else {
-				imported := pump.ImportContacts(ctx, resp.GetContacts())
-				logger.Info().Int("contacts", imported).Msg("Imported contacts")
-			}
-
-			if resp, err := client.Underlying().ListConversations(50, gmproto.ListConversationsRequest_INBOX); err != nil {
-				logger.Warn().Err(err).Msg("Conversation import failed")
-			} else {
-				convs, msgs := 0, 0
-				for _, conv := range resp.GetConversations() {
-					if conv == nil || conv.GetConversationID() == "" {
-						continue
-					}
-					pump.Handle(conv)
-					convs++
-					if history, err := client.Underlying().FetchMessages(conv.GetConversationID(), 10, nil); err != nil {
-						logger.Debug().Err(err).Str("conversation_id", conv.GetConversationID()).Msg("Recent message import failed")
-					} else {
-						msgs += pump.ImportMessages(ctx, history.GetMessages())
-					}
-				}
-				logger.Info().Int("conversations", convs).Int("messages", msgs).Msg("Imported recent conversation history")
-			}
+			runInitialImport(ctx, client, pump, logger)
 
 			if !follow {
 				select {
@@ -111,4 +88,44 @@ func syncCmd() *cobra.Command {
 	}
 	c.Flags().BoolVar(&follow, "follow", false, "stay connected and stream events until interrupted")
 	return c
+}
+
+// runInitialImport pulls contacts and recent conversation history for the
+// inbox and archive folders through an already-connected client. Shared by
+// `gmcli sync` and `gmcli serve`; failures are logged, not fatal, because a
+// partially-imported archive is still useful.
+func runInitialImport(ctx context.Context, client *gm.Client, pump *gmsync.Pump, logger zerolog.Logger) {
+	if resp, err := client.Underlying().ListContacts(); err != nil {
+		logger.Warn().Err(err).Msg("Contact import failed")
+	} else {
+		imported := pump.ImportContacts(ctx, resp.GetContacts())
+		logger.Info().Int("contacts", imported).Msg("Imported contacts")
+	}
+
+	for _, folder := range []struct {
+		name   string
+		folder gmproto.ListConversationsRequest_Folder
+	}{
+		{"INBOX", gmproto.ListConversationsRequest_INBOX},
+		{"ARCHIVE", gmproto.ListConversationsRequest_ARCHIVE},
+	} {
+		if resp, err := client.Underlying().ListConversations(500, folder.folder); err != nil {
+			logger.Warn().Err(err).Str("folder", folder.name).Msg("Conversation import failed")
+		} else {
+			convs, msgs := 0, 0
+			for _, conv := range resp.GetConversations() {
+				if conv == nil || conv.GetConversationID() == "" {
+					continue
+				}
+				pump.Handle(conv)
+				convs++
+				if history, err := client.Underlying().FetchMessages(conv.GetConversationID(), 10, nil); err != nil {
+					logger.Debug().Err(err).Str("conversation_id", conv.GetConversationID()).Msg("Recent message import failed")
+				} else {
+					msgs += pump.ImportMessages(ctx, history.GetMessages())
+				}
+			}
+			logger.Info().Str("folder", folder.name).Int("conversations", convs).Int("messages", msgs).Msg("Imported recent conversation history")
+		}
+	}
 }

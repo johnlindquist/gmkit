@@ -140,19 +140,29 @@ func (p *Pump) onClientReady(ctx context.Context, e *events.ClientReady) {
 	p.touch(ctx)
 }
 
-func (p *Pump) onConversation(ctx context.Context, c *gmproto.Conversation) {
+// ConversationRow converts a libgm conversation proto into the store row
+// shape. Returns ok=false when the proto has no conversation ID. Exported so
+// the RPC event broadcaster can emit the same shape the store persists.
+func ConversationRow(c *gmproto.Conversation, platform string) (store.Conversation, bool) {
 	if c.GetConversationID() == "" {
-		return
+		return store.Conversation{}, false
 	}
-	row := store.Conversation{
+	return store.Conversation{
 		ID:                c.GetConversationID(),
-		SourcePlatform:    p.platform,
+		SourcePlatform:    platform,
 		Name:              c.GetName(),
 		IsGroup:           c.GetIsGroupChat(),
 		ParticipantsJSON:  participantsJSON(c.GetParticipants()),
 		LastMessageTimeMS: normalizeTimestampMS(c.GetLastMessageTimestamp()),
 		Unread:            c.GetUnread(),
 		Pinned:            c.GetPinned(),
+	}, true
+}
+
+func (p *Pump) onConversation(ctx context.Context, c *gmproto.Conversation) {
+	row, ok := ConversationRow(c, p.platform)
+	if !ok {
+		return
 	}
 	if err := p.store.UpsertConversation(ctx, row); err != nil {
 		p.logger.Error().Err(err).Str("conv_id", row.ID).Msg("Upsert conversation failed")
@@ -191,17 +201,20 @@ func (p *Pump) upsertParticipant(ctx context.Context, part *gmproto.Participant)
 	}
 }
 
-func (p *Pump) onMessage(ctx context.Context, w *libgm.WrappedMessage) {
+// MessageRow converts a wrapped libgm message into the store row shape.
+// Returns ok=false when the proto has no message ID. Exported so the RPC
+// event broadcaster can emit the same shape the store persists.
+func MessageRow(w *libgm.WrappedMessage, platform string) (store.Message, bool) {
 	m := w.Message
 	if m == nil || m.GetMessageID() == "" {
-		return
+		return store.Message{}, false
 	}
 	body := messageBody(m)
 	media := primaryMedia(m)
 	row := store.Message{
 		ID:             m.GetMessageID(),
 		ConversationID: m.GetConversationID(),
-		SourcePlatform: p.platform,
+		SourcePlatform: platform,
 		SenderID:       m.GetParticipantID(),
 		TimestampMS:    normalizeTimestampMS(m.GetTimestamp()),
 		Status:         int64(m.GetMessageStatus().GetStatus()),
@@ -223,6 +236,14 @@ func (p *Pump) onMessage(ctx context.Context, w *libgm.WrappedMessage) {
 			row.MimeType = &mt
 		}
 		row.DecryptionKey = media.GetDecryptionKey()
+	}
+	return row, true
+}
+
+func (p *Pump) onMessage(ctx context.Context, w *libgm.WrappedMessage) {
+	row, ok := MessageRow(w, p.platform)
+	if !ok {
+		return
 	}
 	if err := p.store.UpsertMessage(ctx, row); err != nil {
 		p.logger.Error().Err(err).Str("msg_id", row.ID).Msg("Upsert message failed")

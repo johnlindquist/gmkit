@@ -45,5 +45,6 @@ func authCmd() *cobra.Command {
 			return nil
 		},
 	}
+	c.AddCommand(authGoogleCmd())
 	return c
 }

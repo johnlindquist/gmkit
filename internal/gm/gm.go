@@ -438,6 +438,9 @@ type PairResult struct {
 // is responsible for displaying it (terminal QR, plain URL, etc.).
 type QRRenderer func(qrURL string)
 
+// EmojiRenderer is invoked once PairGoogle has the phone confirmation emoji.
+type EmojiRenderer func(emoji string)
+
 // Pair runs the QR pairing flow. It writes session.json on success and
 // returns the paired phone ID. Cancellable via ctx; otherwise bounded by
 // PairTimeout. Existing session.json (if any) is overwritten on success.
@@ -493,6 +496,50 @@ func Pair(ctx context.Context, layout paths.Layout, logger zerolog.Logger, rende
 		}
 		return &PairResult{PhoneID: res.PhoneID, SessionPath: layout.Session}, nil
 	}
+}
+
+// PairGoogle runs the Google account emoji pairing flow with caller-supplied
+// cookies. It writes session.json on success and returns the paired phone ID.
+func PairGoogle(ctx context.Context, layout paths.Layout, logger zerolog.Logger, cookies map[string]string, render EmojiRenderer) (*PairResult, error) {
+	if err := layout.EnsureDirs(); err != nil {
+		return nil, err
+	}
+	if len(cookies) == 0 {
+		return nil, errors.New("google account pairing requires cookies")
+	}
+
+	auth := libgm.NewAuthData()
+	auth.SetCookies(copyStringMap(cookies))
+	cli := libgm.NewClient(auth, nil, logger)
+	defer cli.Disconnect()
+
+	pairCtx, cancel := context.WithTimeout(ctx, PairTimeout)
+	defer cancel()
+
+	if err := cli.FetchConfig(pairCtx); err != nil {
+		return nil, fmt.Errorf("fetch Google Messages config with supplied cookies: %w", err)
+	}
+	emoji, session, err := cli.StartGaiaPairing(pairCtx)
+	if err != nil {
+		return nil, fmt.Errorf("start Google account pairing: %w", err)
+	}
+	render(emoji)
+	phoneID, err := cli.FinishGaiaPairing(pairCtx, session)
+	if err != nil {
+		return nil, fmt.Errorf("finish Google account pairing: %w", err)
+	}
+	if err := saveAuth(layout.Session, auth); err != nil {
+		return nil, fmt.Errorf("persist session: %w", err)
+	}
+	return &PairResult{PhoneID: phoneID, SessionPath: layout.Session}, nil
+}
+
+func copyStringMap(in map[string]string) map[string]string {
+	out := make(map[string]string, len(in))
+	for k, v := range in {
+		out[k] = v
+	}
+	return out
 }
 
 func loadAuth(path string) (*libgm.AuthData, error) {

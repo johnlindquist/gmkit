@@ -75,18 +75,35 @@ func messagesListCmd() *cobra.Command {
 
 func messagesSearchCmd() *cobra.Command {
 	var limit int
+	var convID, sinceStr, untilStr string
 	c := &cobra.Command{
 		Use:   "search <query>",
-		Short: "Full-text search messages (FTS5 syntax)",
-		Args:  cobra.MinimumNArgs(1),
+		Short: "Full-text search messages (FTS5 syntax, with literal fallback)",
+		Long: "Search archived message bodies. The query is tried as FTS5 syntax first " +
+			"(quoted phrases, AND/OR/NOT) and falls back to a literal term search when " +
+			"FTS5 rejects it, so natural-language queries with punctuation just work.",
+		Args: cobra.MinimumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			query := joinArgs(args)
+			since, err := parseFlagTime(sinceStr)
+			if err != nil {
+				return fmt.Errorf("--since: %w", err)
+			}
+			until, err := parseFlagTime(untilStr)
+			if err != nil {
+				return fmt.Errorf("--until: %w", err)
+			}
 			st, err := openStore()
 			if err != nil {
 				return err
 			}
 			defer st.Close()
-			hits, err := st.SearchMessages(context.Background(), query, limit)
+			hits, err := st.SearchMessagesRich(context.Background(), store.SearchOpts{
+				Query:          joinArgs(args),
+				ConversationID: convID,
+				Since:          since,
+				Until:          until,
+				Limit:          limit,
+			})
 			if err != nil {
 				return err
 			}
@@ -99,22 +116,21 @@ func messagesSearchCmd() *cobra.Command {
 			}
 			rows := make([][]string, 0, len(hits))
 			for _, h := range hits {
-				dir := "<-"
-				if h.IsFromMe {
-					dir = "->"
-				}
 				rows = append(rows, []string{
 					output.FormatTime(h.TimestampMS),
-					dir,
+					truncate(h.SenderName, 18),
+					truncate(h.ConversationName, 24),
 					h.MessageID,
-					h.ConversationID,
-					truncate(h.Snippet, 80),
+					truncate(h.Snippet, 70),
 				})
 			}
-			return output.Table(os.Stdout, []string{"time", "dir", "msg_id", "conv_id", "snippet"}, rows)
+			return output.Table(os.Stdout, []string{"time", "from", "conversation", "msg_id", "snippet"}, rows)
 		},
 	}
 	c.Flags().IntVar(&limit, "limit", 50, "max rows")
+	c.Flags().StringVar(&convID, "conv", "", "scope search to one conversation id")
+	c.Flags().StringVar(&sinceStr, "since", "", "lower time bound (YYYY-MM-DD or RFC3339)")
+	c.Flags().StringVar(&untilStr, "until", "", "upper time bound (YYYY-MM-DD or RFC3339)")
 	return c
 }
 

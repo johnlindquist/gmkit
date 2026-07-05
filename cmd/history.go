@@ -6,24 +6,13 @@ import (
 	"os"
 
 	"github.com/spf13/cobra"
-	"go.mau.fi/mautrix-gmessages/pkg/libgm/gmproto"
 
 	"github.com/fdsouvenir/gmcli/internal/gm"
+	"github.com/fdsouvenir/gmcli/internal/history"
 	"github.com/fdsouvenir/gmcli/internal/output"
 	"github.com/fdsouvenir/gmcli/internal/store"
 	gmsync "github.com/fdsouvenir/gmcli/internal/sync"
 )
-
-type historyBackfillResult struct {
-	ConversationID       string `json:"conversation_id"`
-	Requests             int    `json:"requests"`
-	Count                int64  `json:"count"`
-	FetchedMessages      int    `json:"fetched_messages"`
-	SyncRecordsProcessed int    `json:"sync_records_processed"`
-	MessagesBefore       int    `json:"messages_before"`
-	MessagesAfter        int    `json:"messages_after"`
-	MessagesAddedForChat int    `json:"messages_added_for_chat"`
-}
 
 func historyCmd() *cobra.Command {
 	c := &cobra.Command{
@@ -34,6 +23,7 @@ func historyCmd() *cobra.Command {
 			"and the phone must be online.",
 	}
 	c.AddCommand(historyBackfillCmd())
+	c.AddCommand(historyLookupCmd())
 	return c
 }
 
@@ -52,22 +42,11 @@ func historyBackfillCmd() *cobra.Command {
 			if chat == "" {
 				return fmt.Errorf("--chat is required")
 			}
-			if requests <= 0 {
-				requests = 10
-			}
-			if count <= 0 {
-				count = 50
-			}
 			res, err := runHistoryBackfill(chat, requests, count)
 			if err != nil {
 				return err
 			}
-			if flags.jsonOut {
-				return output.JSON(os.Stdout, res)
-			}
-			fmt.Fprintf(os.Stderr, "Backfill for %s: fetched %d message record(s), chat messages %d -> %d (+%d), using %d request(s)\n",
-				res.ConversationID, res.FetchedMessages, res.MessagesBefore, res.MessagesAfter, res.MessagesAddedForChat, res.Requests)
-			return nil
+			return printBackfillResult(res)
 		},
 	}
 	c.Flags().StringVar(&chat, "chat", "", "conversation_id to backfill")
@@ -76,10 +55,74 @@ func historyBackfillCmd() *cobra.Command {
 	return c
 }
 
-func runHistoryBackfill(chat string, requests int, count int64) (historyBackfillResult, error) {
+func historyLookupCmd() *cobra.Command {
+	var phone string
+	var requests int
+	var count int64
+	c := &cobra.Command{
+		Use:   "lookup",
+		Short: "Find a conversation by phone number and backfill its messages",
+		RunE: func(cmd *cobra.Command, args []string) error {
+			if phone == "" {
+				return fmt.Errorf("--phone is required")
+			}
+			layout, err := resolveLayout()
+			if err != nil {
+				return err
+			}
+			logger := newLogger()
+			ctx, cancel := signalContext(context.Background())
+			defer cancel()
+
+			st, err := store.Open(ctx, layout.Database)
+			if err != nil {
+				return fmt.Errorf("open store: %w", err)
+			}
+			defer st.Close()
+
+			client, err := gm.Open(layout, logger)
+			if err != nil {
+				return err
+			}
+			pump := gmsync.New(st, logger)
+			client.Subscribe(pump.Handle)
+			if err := client.Connect(); err != nil {
+				return fmt.Errorf("connect: %w", err)
+			}
+			defer client.Disconnect()
+
+			conv, err := history.LookupConversation(client, pump, phone)
+			if err != nil {
+				return err
+			}
+			fmt.Fprintf(os.Stderr, "Found conversation: %s (ID: %s)\n", conv.GetName(), conv.GetConversationID())
+
+			res, err := history.Backfill(ctx, st, client, pump, conv.GetConversationID(), requests, count)
+			if err != nil {
+				return err
+			}
+			return printBackfillResult(res)
+		},
+	}
+	c.Flags().StringVar(&phone, "phone", "", "phone number in E.164 format (e.g. +13855551234)")
+	c.Flags().IntVar(&requests, "requests", 20, "max FetchMessages calls")
+	c.Flags().Int64Var(&count, "count", 50, "max message records per call")
+	return c
+}
+
+func printBackfillResult(res history.BackfillResult) error {
+	if flags.jsonOut {
+		return output.JSON(os.Stdout, res)
+	}
+	fmt.Fprintf(os.Stderr, "Backfill for %s: fetched %d message record(s), chat messages %d -> %d (+%d), using %d request(s)\n",
+		res.ConversationID, res.FetchedMessages, res.MessagesBefore, res.MessagesAfter, res.MessagesAddedForChat, res.Requests)
+	return nil
+}
+
+func runHistoryBackfill(chat string, requests int, count int64) (history.BackfillResult, error) {
 	layout, err := resolveLayout()
 	if err != nil {
-		return historyBackfillResult{}, err
+		return history.BackfillResult{}, err
 	}
 	logger := newLogger()
 	ctx, cancel := signalContext(context.Background())
@@ -87,20 +130,20 @@ func runHistoryBackfill(chat string, requests int, count int64) (historyBackfill
 
 	st, err := store.Open(ctx, layout.Database)
 	if err != nil {
-		return historyBackfillResult{}, fmt.Errorf("open store: %w", err)
+		return history.BackfillResult{}, fmt.Errorf("open store: %w", err)
 	}
 	defer st.Close()
 
 	client, err := gm.Open(layout, logger)
 	if err != nil {
-		return historyBackfillResult{}, err
+		return history.BackfillResult{}, err
 	}
 
 	pump := gmsync.New(st, logger)
 	client.Subscribe(pump.Handle)
 
 	if err := client.Connect(); err != nil {
-		return historyBackfillResult{}, fmt.Errorf("connect: %w", err)
+		return history.BackfillResult{}, fmt.Errorf("connect: %w", err)
 	}
 	defer client.Disconnect()
 
@@ -108,69 +151,10 @@ func runHistoryBackfill(chat string, requests int, count int64) (historyBackfill
 		pump.Handle(conv)
 	} else if _, localErr := st.GetConversation(ctx, chat); localErr != nil {
 		if err != nil {
-			return historyBackfillResult{}, fmt.Errorf("get conversation %s: %w", chat, err)
+			return history.BackfillResult{}, fmt.Errorf("get conversation %s: %w", chat, err)
 		}
-		return historyBackfillResult{}, fmt.Errorf("conversation %s is not in the local store; run `gmcli sync` first", chat)
+		return history.BackfillResult{}, fmt.Errorf("conversation %s is not in the local store; run `gmcli sync` first", chat)
 	}
 
-	cursor, err := oldestCursor(ctx, st, chat)
-	if err != nil {
-		return historyBackfillResult{}, err
-	}
-
-	before, err := st.CountMessagesForConversation(ctx, chat)
-	if err != nil {
-		return historyBackfillResult{}, fmt.Errorf("count messages before backfill: %w", err)
-	}
-
-	res := historyBackfillResult{ConversationID: chat, Count: count, MessagesBefore: before}
-	for i := 0; i < requests; i++ {
-		resp, err := client.Underlying().FetchMessages(chat, count, cursor)
-		if err != nil {
-			return res, fmt.Errorf("fetch messages: %w", err)
-		}
-		res.Requests++
-		msgs := resp.GetMessages()
-		res.FetchedMessages += len(msgs)
-		imported := pump.ImportMessages(ctx, msgs)
-		res.SyncRecordsProcessed += imported
-		next := resp.GetCursor()
-		if len(msgs) == 0 || sameCursor(cursor, next) {
-			break
-		}
-		cursor = next
-	}
-	after, err := st.CountMessagesForConversation(ctx, chat)
-	if err != nil {
-		return res, fmt.Errorf("count messages after backfill: %w", err)
-	}
-	res.MessagesAfter = after
-	res.MessagesAddedForChat = after - before
-	return res, nil
-}
-
-func oldestCursor(ctx context.Context, st *store.Store, chat string) (*gmproto.Cursor, error) {
-	msgs, err := st.ListMessages(ctx, store.ListMessageOpts{
-		ConversationID: chat,
-		Limit:          1,
-		Order:          "asc",
-	})
-	if err != nil {
-		return nil, err
-	}
-	if len(msgs) == 0 {
-		return nil, nil
-	}
-	return &gmproto.Cursor{
-		LastItemID:        msgs[0].ID,
-		LastItemTimestamp: msgs[0].TimestampMS,
-	}, nil
-}
-
-func sameCursor(a, b *gmproto.Cursor) bool {
-	if a == nil || b == nil {
-		return a == b
-	}
-	return a.GetLastItemID() == b.GetLastItemID() &&
-		a.GetLastItemTimestamp() == b.GetLastItemTimestamp()
+	return history.Backfill(ctx, st, client, pump, chat, requests, count)
 }

@@ -83,6 +83,9 @@ func Root() *cobra.Command {
 	root.AddCommand(historyCmd())
 	root.AddCommand(sendCmd())
 	root.AddCommand(mediaCmd())
+	root.AddCommand(serveCmd())
+	root.AddCommand(approvalsCmd())
+	root.AddCommand(mcpCmd())
 	return root
 }
 

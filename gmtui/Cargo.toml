@@ -1,0 +1,33 @@
+[package]
+name = "gmtui"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.86"
+description = "Terminal UI for gmcli — browse, search, and approve Google Messages from your terminal"
+license = "AGPL-3.0-or-later"
+repository = "https://github.com/fdsouvenir/gmcli"
+
+[dependencies]
+# Core TUI
+ratatui = "0.30.2"
+crossterm = { version = "0.29.0", features = ["event-stream"] }
+futures = "0.3"
+
+# Async runtime + NDJSON framing over the gmcli daemon socket
+tokio = { version = "1.52", features = ["macros", "rt-multi-thread", "net", "sync", "time", "io-util"] }
+tokio-util = { version = "0.7.18", features = ["codec"] }
+
+# JSON-RPC payloads
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+
+# CLI / paths / errors
+clap = { version = "4.6", features = ["derive"] }
+color-eyre = "0.6.5"
+
+# Widgets
+tui-input = "0.15"
+
+[profile.release]
+lto = true
+strip = true

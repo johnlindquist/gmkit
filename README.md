@@ -2,7 +2,22 @@
 
 A standalone Go CLI that connects to Google Messages, archives conversations
 into a local SQLite + FTS5 database, and exposes a query surface suitable for
-shell use and LLM tool integrations.
+shell use and LLM tool integrations — plus a daemon (`gmcli serve`), an MCP
+server for AI agents (`gmcli mcp`), and a Rust terminal UI
+([`gmtui/`](gmtui/)) with a human approval queue for agent-proposed sends.
+
+```
+                 ┌───────────────────────────────┐
+                 │ gmcli serve (Go daemon)       │
+                 │ libgm session · sync · SQLite │
+                 └──────────────┬────────────────┘
+                                │ JSON-RPC over unix socket
+             ┌──────────────────┼─────────────────────┐
+             │                  │                     │
+     gmtui (Rust TUI)      gmcli mcp             gmcli CLI + --json
+     human cockpit +       MCP tools for         scripts and ad-hoc
+     send approvals        Claude & agents       agent use
+```
 
 > **Status:** beta. Pairing, session persistence, sync loop, query CLI
 > (`messages`, `contacts`, `chats`), best-effort history backfill, send
@@ -118,6 +133,64 @@ gmcli media download --message <msg-id>
 gmcli --json chats list | jq '.[0].name'
 ```
 
+## Daemon, TUI, and agents
+
+The daemon keeps the session alive, streams events into the archive, and
+exposes a JSON-RPC surface over a unix socket (`<store>/gmcli.sock`,
+documented in [`docs/rpc-protocol.md`](docs/rpc-protocol.md)). **You
+normally never start it yourself**: gmtui, `gmcli mcp`, and `gmcli
+approvals` auto-start it on demand (`serve --auto`) and it exits on its own
+after ten minutes without clients. Run it manually only when you want
+different behavior:
+
+```sh
+gmcli serve                      # always-on, read-only: query surface only
+gmcli --read-only=false serve    # always-on with sends (approval queue)
+gmcli serve --offline            # archive queries without a phone connection
+```
+
+Auto-started daemons use the approval queue for sends — safe by design,
+since nothing reaches the phone without a human approving — and log to
+`<store>/daemon.log`.
+
+**gmtui** ([`gmtui/`](gmtui/)) is a Rust/ratatui terminal client:
+conversation browser, live message stream, full-text search, compose, and
+the approval queue UI. After pairing once with `gmcli auth`, running `gmtui`
+is all a new user needs — it brings the daemon up itself.
+`cd gmtui && cargo install --path .`
+
+**AI agents** connect through `gmcli mcp`, an MCP (Model Context Protocol)
+stdio server. Read tools (`find_chats`, `search_messages`, `list_chats`,
+`list_messages`, `get_message_context`, `search_contacts`, `get_status`)
+work standalone against the local archive; `send_text` and
+`backfill_history` go through the daemon (auto-started as needed). Search is
+agent-friendly: natural-language queries fall back gracefully from FTS5
+syntax to literal AND then OR term matching, results carry sender and
+conversation names plus ISO timestamps, and `since`/`until` accept ISO dates
+or relative durations like `7d`. Register with your agent runtime, e.g. for
+Claude Code:
+
+```sh
+claude mcp add google-messages -- gmcli mcp
+```
+
+**The approval queue** is the piece that makes agent sends safe: under the
+default daemon policy (`--sends approve`), an agent's `send_text` only
+*proposes* a message. It lands in a local queue, gmtui pops a warning, and a
+human approves (`y` in gmtui, or `gmcli approvals approve <id>`) or denies
+it. Nothing touches your phone until then. `--sends direct` skips the queue
+for people who trust their agents; every send still leaves an audit row.
+
+```sh
+gmcli approvals list                       # review the queue headlessly
+gmcli --read-only=false approvals approve <id>   # approve = send
+gmcli approvals deny <id> --reason "nope"
+```
+
+While `serve` is running, prefer the socket/MCP surface over `gmcli
+sync`/`send`/`history` CLI commands on the same store — the daemon owns the
+one allowed session to your phone.
+
 ## Global flags
 
 | Flag             | Default                            | Purpose                                                  |
@@ -131,25 +204,31 @@ gmcli --json chats list | jq '.[0].name'
 ## Layout
 
 ```
-cmd/                  Cobra command tree (auth, sync, version, doctor,
-                      messages, contacts, chats, send, media)
+cmd/                  Cobra command tree (auth, sync, serve, mcp, approvals,
+                      version, doctor, messages, contacts, chats, send, media)
 internal/
   gm/                 libgm wrapper — pairing, session, events, send/react,
                       WaitForReady, DownloadMedia
-  store/              SQLite + FTS5 store (schema v2: + aliases table)
+  store/              SQLite + FTS5 store (schema v3: aliases + approvals)
   sync/               Event-to-store pump
+  history/            Best-effort backfill engine (shared by CLI and daemon)
+  rpc/                Daemon: JSON-RPC over unix socket, event stream,
+                      approval queue (docs/rpc-protocol.md)
   output/             Shared JSON / tab-aligned table renderers
   paths/              XDG path resolution (XDG_STATE_HOME)
   logging/            zerolog setup
+gmtui/                Rust ratatui terminal client for the daemon
 skills/
   google-messages/    LLM skill bundle - archive playbook for assistants
 docs/research/        Phase 1 research notes
+docs/rpc-protocol.md  Daemon socket protocol reference
 ```
 
 ## LLM integration
 
-The bundled OpenClaw skill lives in `skills/google-messages`. It is published
-on ClawHub as
+The first-class integration is `gmcli mcp` (see “Daemon, TUI, and agents”
+above). The bundled OpenClaw skill lives in `skills/google-messages`. It is
+published on ClawHub as
 [Google Messages Local Archive](https://clawhub.ai/fdsouvenir/google-messages-local-archive)
 (`google-messages-local-archive`) for searching, summarizing, and answering
 questions from a local Google Messages SMS/RCS archive with read-only commands

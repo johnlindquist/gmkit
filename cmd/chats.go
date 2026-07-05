@@ -19,7 +19,51 @@ func chatsCmd() *cobra.Command {
 		Short: "List and inspect conversations",
 	}
 	c.AddCommand(chatsListCmd())
+	c.AddCommand(chatsFindCmd())
 	c.AddCommand(chatsShowCmd())
+	return c
+}
+
+func chatsFindCmd() *cobra.Command {
+	var limit int
+	c := &cobra.Command{
+		Use:   "find <person-or-number>",
+		Short: "Find conversations by contact name, alias, group name, or number",
+		Args:  cobra.MinimumNArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			st, err := openStore()
+			if err != nil {
+				return err
+			}
+			defer st.Close()
+			convs, err := st.FindConversations(context.Background(), joinArgs(args), limit)
+			if err != nil {
+				return err
+			}
+			if flags.jsonOut {
+				return output.JSON(os.Stdout, convs)
+			}
+			if len(convs) == 0 {
+				fmt.Fprintln(os.Stderr, "(no matching conversations)")
+				return nil
+			}
+			rows := make([][]string, 0, len(convs))
+			for _, c := range convs {
+				kind := "1:1"
+				if c.IsGroup {
+					kind = "grp"
+				}
+				rows = append(rows, []string{
+					output.FormatTime(c.LastMessageTimeMS),
+					kind,
+					truncate(c.DisplayName(), 40),
+					c.ID,
+				})
+			}
+			return output.Table(os.Stdout, []string{"last_msg", "kind", "name", "conv_id"}, rows)
+		},
+	}
+	c.Flags().IntVar(&limit, "limit", 25, "max rows")
 	return c
 }
 
