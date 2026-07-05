@@ -28,6 +28,9 @@ color-eyre = "0.6.5"
 # Widgets
 tui-input = "0.15"
 
+# In-terminal QR rendering for the pairing flow
+qrcode = { version = "0.14", default-features = false }
+
 [profile.release]
 lto = true
 strip = true

@@ -43,6 +43,8 @@ pub enum AppEvent {
     Server(ServerEvent),
     /// The daemon socket closed (daemon exited or crashed).
     DaemonLost,
+    /// The auth.pair RPC itself failed (old daemon, offline, ...).
+    PairingFailed(String),
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -52,6 +54,16 @@ pub enum Focus {
     Chats,
     Messages,
     Compose,
+}
+
+/// State of the in-TUI pairing flow (auth.pair on the daemon).
+pub struct Pairing {
+    /// Rendered unicode QR (multi-line), once the daemon sends the URL.
+    pub qr: Option<String>,
+    pub url: Option<String>,
+    pub message: String,
+    pub failed: bool,
+    pub succeeded: bool,
 }
 
 /// Identifies what the omni preview pane should show for a selection.
@@ -133,6 +145,9 @@ pub struct App {
     pub approvals: Vec<Approval>,
     pub approval_state: ListState,
 
+    /// Some(_) while the pairing overlay is open.
+    pub pairing: Option<Pairing>,
+
     pub status: DaemonStatus,
     pub flash: Option<(String, i64)>,
 }
@@ -162,6 +177,7 @@ impl App {
             show_approvals: false,
             approvals: Vec::new(),
             approval_state: ListState::default(),
+            pairing: None,
             status: DaemonStatus::default(),
             flash: None,
         }
@@ -444,6 +460,58 @@ impl App {
         });
     }
 
+    /// Open the pairing overlay and kick off the daemon-side QR flow. The
+    /// daemon broadcasts pair.qr / pair.success / pair.error; on success it
+    /// restarts itself and our reconnect loop finishes the job.
+    fn start_pairing(&mut self) {
+        self.pairing = Some(Pairing {
+            qr: None,
+            url: None,
+            message: "requesting a pairing QR from Google…".to_string(),
+            failed: false,
+            succeeded: false,
+        });
+        let rpc = self.rpc.clone();
+        self.spawn(async move {
+            match rpc.call("auth.pair", json!({})).await {
+                Ok(_) => None,
+                Err(e) => Some(AppEvent::PairingFailed(format!(
+                    "could not start pairing: {e}"
+                ))),
+            }
+        });
+    }
+
+    /// Backfill older history for the currently open conversation.
+    fn backfill_current_chat(&mut self) {
+        let Some(chat) = self.current_chat.clone() else {
+            self.flash("open a conversation first");
+            return;
+        };
+        self.flash("backfilling older messages…");
+        let rpc = self.rpc.clone();
+        self.spawn(async move {
+            #[derive(serde::Deserialize, Default)]
+            struct Backfill {
+                #[serde(default)]
+                messages_added_for_chat: i64,
+            }
+            match rpc
+                .call_as::<Backfill>(
+                    "history.backfill",
+                    json!({"conversation_id": chat, "requests": 10, "count": 50}),
+                )
+                .await
+            {
+                Ok(res) => Some(AppEvent::Flash(format!(
+                    "backfill: +{} older message(s)",
+                    res.messages_added_for_chat
+                ))),
+                Err(e) => Some(AppEvent::Flash(format!("backfill: {e}"))),
+            }
+        });
+    }
+
     // ---- omni preview ----------------------------------------------------
 
     fn selected_preview_key(&self) -> Option<PreviewKey> {
@@ -675,6 +743,12 @@ impl App {
                 self.daemon_lost = true;
                 self.status.connected = false;
             }
+            AppEvent::PairingFailed(msg) => {
+                if let Some(p) = self.pairing.as_mut() {
+                    p.failed = true;
+                    p.message = format!("{msg} — press p to retry, esc to close");
+                }
+            }
         }
     }
 
@@ -739,6 +813,43 @@ impl App {
                     }
                 }
             }
+            "pair.qr" => {
+                if let Some(p) = self.pairing.as_mut() {
+                    let url = ev
+                        .data
+                        .get("url")
+                        .and_then(serde_json::Value::as_str)
+                        .unwrap_or_default()
+                        .to_string();
+                    p.qr = render_qr(&url);
+                    p.url = Some(url);
+                    p.message =
+                        "scan with Google Messages → Settings → Device pairing → QR scanner"
+                            .to_string();
+                }
+            }
+            "pair.success" => {
+                if let Some(p) = self.pairing.as_mut() {
+                    p.succeeded = true;
+                    p.qr = None;
+                    p.message =
+                        "paired ✓ — restarting the daemon with the new session…".to_string();
+                }
+                self.status.auth_expired = false;
+            }
+            "pair.error" => {
+                if let Some(p) = self.pairing.as_mut() {
+                    p.failed = true;
+                    p.qr = None;
+                    p.message = format!(
+                        "pairing failed: {} — press p to retry, esc to close",
+                        ev.data
+                            .get("error")
+                            .and_then(serde_json::Value::as_str)
+                            .unwrap_or("unknown error")
+                    );
+                }
+            }
             "sync.status" => {
                 let state = ev
                     .data
@@ -754,12 +865,19 @@ impl App {
                         // The daemon just imported fresh data outside the
                         // event stream: refetch everything visible.
                         self.status.connected = true;
+                        self.status.auth_expired = false;
                         self.fetch_chats();
                         self.fetch_status();
                         if let Some(chat) = self.current_chat.clone() {
                             self.open_chat(chat);
                         }
                         self.preview_cache.clear();
+                        // Pairing epilogue: the post-restart daemon has
+                        // synced — we're fully back.
+                        if self.pairing.as_ref().is_some_and(|p| p.succeeded) {
+                            self.pairing = None;
+                            self.flash("paired ✓ — messages syncing");
+                        }
                     }
                     "phone_not_responding" => {
                         self.status.connected = false;
@@ -888,6 +1006,10 @@ impl App {
                 self.should_quit = true;
                 return;
             }
+            if self.pairing.is_some() {
+                self.handle_pairing_key(key);
+                return;
+            }
             if self.show_approvals {
                 self.handle_approvals_key(key);
                 return;
@@ -959,6 +1081,21 @@ impl App {
         }
     }
 
+    fn handle_pairing_key(&mut self, key: KeyEvent) {
+        let failed = self.pairing.as_ref().is_some_and(|p| p.failed);
+        let succeeded = self.pairing.as_ref().is_some_and(|p| p.succeeded);
+        match key.code {
+            KeyCode::Esc | KeyCode::Char('q') => {
+                // Closing early is harmless: post-success the reconnect
+                // continues regardless, and an in-flight QR just expires.
+                let _ = succeeded;
+                self.pairing = None;
+            }
+            KeyCode::Char('p') if failed => self.start_pairing(),
+            _ => {}
+        }
+    }
+
     fn handle_approvals_key(&mut self, key: KeyEvent) {
         match key.code {
             KeyCode::Esc | KeyCode::Char('a') | KeyCode::Char('q') => {
@@ -1027,6 +1164,7 @@ impl App {
                 self.show_approvals = true;
                 self.fetch_approvals();
             }
+            KeyCode::Char('p') => self.start_pairing(),
             KeyCode::Char('r') => {
                 self.fetch_chats();
                 self.fetch_status();
@@ -1067,6 +1205,8 @@ impl App {
                 self.show_approvals = true;
                 self.fetch_approvals();
             }
+            KeyCode::Char('p') => self.start_pairing(),
+            KeyCode::Char('b') => self.backfill_current_chat(),
             KeyCode::Char('r') => {
                 if let Some(chat) = self.current_chat.clone() {
                     self.open_chat(chat);
@@ -1081,6 +1221,20 @@ impl App {
         self.compose_input.reset();
         self.focus = Focus::Compose;
     }
+}
+
+/// Render a pairing URL as a unicode half-block QR, or None if encoding
+/// fails (the raw URL is shown as fallback either way).
+fn render_qr(url: &str) -> Option<String> {
+    if url.is_empty() {
+        return None;
+    }
+    let code = qrcode::QrCode::new(url.as_bytes()).ok()?;
+    Some(
+        code.render::<qrcode::render::unicode::Dense1x2>()
+            .quiet_zone(true)
+            .build(),
+    )
 }
 
 fn list_next(state: &mut ListState, len: usize) {

@@ -19,6 +19,7 @@ import (
 	"go.mau.fi/mautrix-gmessages/pkg/libgm/gmproto"
 
 	"github.com/johnlindquist/gmkit/internal/gm"
+	"github.com/johnlindquist/gmkit/internal/paths"
 	"github.com/johnlindquist/gmkit/internal/store"
 	gmsync "github.com/johnlindquist/gmkit/internal/sync"
 )
@@ -41,6 +42,9 @@ type Deps struct {
 	Version     string
 	SendMode    SendMode
 	LiveTimeout time.Duration // 0 means defaultLiveTimeout
+	// Layout enables the in-daemon pairing flow (auth.pair). Zero value
+	// disables it (tests).
+	Layout paths.Layout
 	// IdleExit, when > 0, arms the Idle() signal: it fires once the server
 	// has had no client connections for this long (including never having
 	// had one). Used by auto-started daemons to retire themselves.
@@ -73,6 +77,9 @@ type Server struct {
 
 	shutdown     chan struct{}
 	shutdownOnce sync.Once
+
+	// pairing guards against concurrent auth.pair flows.
+	pairing atomic.Bool
 }
 
 // ShutdownRequested fires when a client asked the daemon to exit

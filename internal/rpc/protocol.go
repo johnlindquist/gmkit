@@ -81,6 +81,12 @@ const (
 	EventSyncStatus          = "sync.status"
 	EventApprovalRequested   = "approval.requested"
 	EventApprovalResolved    = "approval.resolved"
+	// Pairing flow (auth.pair): the QR to render, then success or error.
+	// After pair.success the daemon restarts itself to load the new
+	// session; clients reconnect and refetch.
+	EventPairQR      = "pair.qr"
+	EventPairSuccess = "pair.success"
+	EventPairError   = "pair.error"
 )
 
 // SendMode controls how the daemon treats phone-mutating requests.

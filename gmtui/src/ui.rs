@@ -42,6 +42,66 @@ pub fn render(frame: &mut Frame, app: &mut App) {
     if app.show_approvals {
         render_approvals(frame, app);
     }
+    if app.pairing.is_some() {
+        render_pairing(frame, app);
+    }
+}
+
+/// Full pairing flow as an overlay: QR code, instructions, outcome.
+fn render_pairing(frame: &mut Frame, app: &App) {
+    let Some(pairing) = app.pairing.as_ref() else {
+        return;
+    };
+    let mut lines: Vec<Line> = vec![Line::raw("")];
+    if let Some(qr) = &pairing.qr {
+        for row in qr.lines() {
+            lines.push(Line::from(Span::raw(format!("  {row}"))));
+        }
+        lines.push(Line::raw(""));
+    }
+    lines.push(Line::styled(
+        format!("  {}", pairing.message),
+        if pairing.failed {
+            Style::default().fg(Color::Red)
+        } else if pairing.succeeded {
+            Style::default().fg(ME).add_modifier(Modifier::BOLD)
+        } else {
+            Style::default().fg(WARN)
+        },
+    ));
+    if let Some(url) = &pairing.url {
+        if pairing.qr.is_some() {
+            lines.push(Line::raw(""));
+            lines.push(Line::styled(
+                "  QR unreadable? Paste this URL into any QR generator:",
+                Style::default().fg(DIM),
+            ));
+            lines.push(Line::styled(format!("  {url}"), Style::default().fg(DIM)));
+        }
+    }
+    lines.push(Line::raw(""));
+    lines.push(Line::styled("  esc close", Style::default().fg(DIM)));
+
+    // Size the overlay to the QR (plus chrome), clamped to the terminal.
+    let content_h = lines.len() as u16 + 2;
+    let content_w = lines
+        .iter()
+        .map(|l| l.width() as u16)
+        .max()
+        .unwrap_or(40)
+        .saturating_add(4);
+    let area = frame.area();
+    let w = content_w.min(area.width.saturating_sub(2)).max(40);
+    let h = content_h.min(area.height.saturating_sub(2));
+    let rect = Rect {
+        x: area.x + (area.width.saturating_sub(w)) / 2,
+        y: area.y + (area.height.saturating_sub(h)) / 2,
+        width: w,
+        height: h,
+    };
+    frame.render_widget(Clear, rect);
+    let p = Paragraph::new(Text::from(lines)).block(pane_block("pair with Google Messages", true));
+    frame.render_widget(p, rect);
 }
 
 // ---------------------------------------------------------------- omni
@@ -535,6 +595,7 @@ fn render_messages(frame: &mut Frame, app: &mut App, area: Rect) {
             Line::raw("  /      search people & messages (the launch screen)"),
             Line::raw("  enter  open conversation      i  compose a message"),
             Line::raw("  j/k    move                   a  review agent send requests"),
+            Line::raw("  b      backfill older texts   p  pair with your phone (QR)"),
             Line::raw("  tab    switch pane            q  quit"),
         ]))
         .block(pane_block(&title, focused));
@@ -606,7 +667,7 @@ fn render_compose(frame: &mut Frame, app: &App, area: Rect) {
 fn render_status(frame: &mut Frame, app: &App, area: Rect) {
     let conn = if app.status.auth_expired {
         Span::styled(
-            "✖ pairing expired — run `gmcli auth` in a terminal, then relaunch gmtui",
+            "✖ pairing expired — press p to re-pair (esc first if searching)",
             Style::default().fg(Color::Red).add_modifier(Modifier::BOLD),
         )
     } else if app.daemon_lost {
@@ -651,7 +712,7 @@ fn render_status(frame: &mut Frame, app: &App, area: Rect) {
         )
     } else {
         Span::styled(
-            "   q quit · / search · i compose · a approvals",
+            "   q quit · / search · i compose · a approvals · b backfill · p pair · r refresh",
             Style::default().fg(DIM),
         )
     };

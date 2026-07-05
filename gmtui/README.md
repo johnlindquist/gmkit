@@ -21,9 +21,13 @@ Google Messages session, the SQLite archive, and the send policy.
 ## Run
 
 ```sh
-gmcli auth     # once: pair with your phone (QR code)
-gmtui          # that's it
+gmtui          # that's it — pairing happens in the TUI too (press p)
 ```
+
+On first run (or when Google expires the pairing), press `p`: a QR code
+renders right in the terminal — scan it with Google Messages → Settings →
+Device pairing. The daemon restarts itself with the new session and
+everything syncs. (`gmcli auth` in a terminal still works if you prefer.)
 
 If no daemon is listening, gmtui starts one automatically (`gmcli serve
 --auto`: sends gated by the approval queue, exits ~10 minutes after the last
@@ -85,6 +89,8 @@ under a supervisor.
 | `/` or `s`     | back to search from browse                              |
 | `j`/`k`, `tab` | move / switch pane in browse mode                       |
 | `i`            | compose to the selected conversation                    |
+| `p`            | pair / re-pair with your phone (QR in the terminal)     |
+| `b`            | backfill older messages for the open conversation      |
 | `a`            | review pending agent send requests                      |
 | `y` / `n`      | approve (sends!) / deny the selected request            |
 | `r`            | refresh · `g`/`G` top/bottom · `q` quit (`ctrl-c` anywhere) |

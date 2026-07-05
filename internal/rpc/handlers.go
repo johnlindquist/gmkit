@@ -9,6 +9,7 @@ import (
 	"github.com/google/uuid"
 	"go.mau.fi/mautrix-gmessages/pkg/libgm/gmproto"
 
+	"github.com/johnlindquist/gmkit/internal/gm"
 	"github.com/johnlindquist/gmkit/internal/history"
 	"github.com/johnlindquist/gmkit/internal/store"
 )
@@ -42,6 +43,8 @@ func (s *Server) dispatch(ctx context.Context, c *serverConn, method string, par
 		return s.handleContactsShow(ctx, params)
 	case "sync.refresh":
 		return s.handleSyncRefresh(ctx)
+	case "auth.pair":
+		return s.handleAuthPair()
 	case "daemon.shutdown":
 		// Used by `gmcli auth` after re-pairing: the daemon must restart to
 		// load the new session; on-demand clients spawn a fresh one.
@@ -366,6 +369,48 @@ func (s *Server) handleSyncRefresh(ctx context.Context) (any, *Error) {
 
 	go s.runRefresh()
 	return map[string]any{"started": true}, nil
+}
+
+// handleAuthPair starts the QR pairing flow inside the daemon. The QR URL
+// and the outcome are broadcast as pair.* events for clients to render. On
+// success the daemon restarts itself so the fresh session loads — on-demand
+// clients respawn it and reconnect automatically.
+func (s *Server) handleAuthPair() (any, *Error) {
+	if s.deps.Layout.Session == "" {
+		return nil, &Error{Code: CodeUnavailable, Message: "pairing is not available on this daemon"}
+	}
+	if !s.pairing.CompareAndSwap(false, true) {
+		return map[string]any{"started": false, "reason": "pairing already in progress"}, nil
+	}
+	// The old session is dead weight during pairing; stop it from fighting
+	// over the relay.
+	if s.deps.Client != nil {
+		s.deps.Client.Disconnect()
+	}
+	go s.runPairing()
+	return map[string]any{"started": true}, nil
+}
+
+func (s *Server) runPairing() {
+	defer s.pairing.Store(false)
+	ctx, cancel := context.WithTimeout(context.Background(), gm.PairTimeout+30*time.Second)
+	defer cancel()
+
+	res, err := gm.Pair(ctx, s.deps.Layout, s.deps.Logger, func(qrURL string) {
+		s.Broadcast(EventPairQR, map[string]any{"url": qrURL})
+	})
+	if err != nil {
+		s.deps.Logger.Warn().Err(err).Msg("in-daemon pairing failed")
+		s.Broadcast(EventPairError, map[string]any{"error": err.Error()})
+		return
+	}
+	s.authExpired.Store(false)
+	s.deps.Logger.Info().Str("phone_id", res.PhoneID).Msg("paired via TUI; restarting daemon to load new session")
+	s.Broadcast(EventPairSuccess, map[string]any{"phone_id": res.PhoneID})
+	// Give the success event a moment to reach subscribers, then restart so
+	// the daemon comes back with the fresh session.
+	time.Sleep(500 * time.Millisecond)
+	s.requestShutdown()
 }
 
 // refreshConversations bounds one sync.refresh pass: how many recent inbox

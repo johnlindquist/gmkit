@@ -95,6 +95,7 @@ func serveCmd() *cobra.Command {
 				Version:  Version,
 				SendMode: mode,
 				IdleExit: idleExit,
+				Layout:   layout,
 			})
 			if client != nil {
 				// Order matters: the pump persists the row first, then the
